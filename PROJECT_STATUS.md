@@ -6,9 +6,9 @@ Current state (after scaffold and MVP enhancements):
   - `init` now accepts `--title` and `--source` (absolute path stored in project_meta.json).
 - Orchestrator: implemented and runs pipeline stages sequentially using local stubs (src/app/orchestrator.py).
 - Modules with stubs implemented:
-  - transcription (src/transcription/whisper_stub.py)
+  - transcription (src/transcription/whisper_stub.py) — whisperx_adapter implemented and unit-tested
   - scene_indexing (src/scene_indexing/scene_detector.py)
-  - director (src/director/planner.py)
+  - director (src/director/planner.py) — deterministic planner implemented to produce thesis from scene_index.json
   - script (src/script/writer.py)
   - visual_generation (src/visual_generation/comfyui_client.py)
   - audio (src/audio/tts_adapter.py)
@@ -110,3 +110,10 @@ Commands used for verification:
 - python src/main.py run --project-id <id>
 
 Status: This task (Integrate scene ranking and implement clip extraction) is complete and tested.
+
+Additional updates:
+
+- Added optional WhisperX integration test at tests/test_whisperx_integration.py (marker: integration). The test is optional and runs only when explicitly requested (pytest -m integration).
+- Committed the integration test locally; attempted git push but remote push failed due to permission (HTTP 403). Local commits exist; see GIT_PUSH_INSTRUCTIONS.md for pushing from a machine with credentials.
+- Unit test suite (fast tests): 4 passed, 2 skipped in this environment.
+- WhisperX adapter implementation exists and is unit-tested, but real-model integration is pending and requires an environment with whisperx/models and optionally a GPU.
