@@ -1,0 +1,10 @@
+__pycache__/
+.env
+.env.*
+data/
+renders/
+.vscode/
+*.pyc
+*.pkl
+*.ckpt
+models/

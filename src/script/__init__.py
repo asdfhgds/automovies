@@ -1,0 +1,1 @@
+# Script writer package (stub)

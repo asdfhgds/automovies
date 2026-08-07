@@ -1,0 +1,1 @@
+# QC package (critic stub)

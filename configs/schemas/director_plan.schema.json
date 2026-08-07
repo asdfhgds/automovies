@@ -1,0 +1,64 @@
+{
+  "type": "object",
+  "required": [
+    "project_id",
+    "content_type",
+    "topic",
+    "thesis",
+    "hook",
+    "tone",
+    "structure",
+    "visual_strategy",
+    "music_mood",
+    "length_target_sec",
+    "novelty_constraints"
+  ],
+  "properties": {
+    "project_id": { "type": "string" },
+    "content_type": {
+      "type": "string",
+      "enum": [
+        "scene_analysis",
+        "philosophical_essay",
+        "theory_video",
+        "character_breakdown",
+        "recap",
+        "montage",
+        "experimental"
+      ]
+    },
+    "topic": { "type": "string" },
+    "thesis": { "type": "string" },
+    "hook": { "type": "string" },
+    "tone": { "type": "string" },
+    "structure": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/section" }
+    },
+    "visual_strategy": { "type": "array", "items": { "type": "string" } },
+    "music_mood": { "type": "string" },
+    "length_target_sec": { "type": "integer" },
+    "novelty_constraints": {
+      "type": "object",
+      "properties": {
+        "avoid_recent_hook_types": { "type": "boolean" },
+        "avoid_recent_structure": { "type": "boolean" },
+        "avoid_recent_visual_styles": { "type": "boolean" },
+        "min_style_distance": { "type": "number" }
+      }
+    }
+  },
+  "definitions": {
+    "section": {
+      "type": "object",
+      "required": ["id", "goal", "target_seconds"],
+      "properties": {
+        "id": { "type": "string" },
+        "goal": { "type": "string" },
+        "target_seconds": { "type": "integer" },
+        "visual_notes": { "type": "string" },
+        "audio_notes": { "type": "string" }
+      }
+    }
+  }
+}

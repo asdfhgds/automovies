@@ -1,0 +1,15 @@
+default_project_dir: data
+schemas_dir: configs/schemas
+models:
+  director_model: "local/text-model"
+  tts: "local/tts"
+  image_model: "comfyui"
+novelty_memory_size: 20
+transcription:
+  provider: whisperx
+  model: small
+  device: auto
+  compute_type: auto
+  language: auto
+  align: true
+  diarization: false

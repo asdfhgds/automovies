@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "required": ["project_id", "timeline", "audio_mix", "export"],
+  "properties": {
+    "project_id": { "type": "string" },
+    "timeline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["start_sec", "end_sec", "source_type", "source_path"],
+        "properties": {
+          "start_sec": { "type": "number" },
+          "end_sec": { "type": "number" },
+          "source_type": { "type": "string", "enum": ["scene_clip", "generated_image", "generated_video", "title_card", "text_overlay"] },
+          "source_path": { "type": "string" },
+          "caption": { "type": "string" }
+        }
+      }
+    },
+    "audio_mix": { "type": "object", "properties": { "voice_path": { "type": "string" }, "music_path": { "type": "string" }, "voice_gain_db": { "type": "number" }, "music_gain_db": { "type": "number" } } },
+    "export": { "type": "object", "properties": { "format": { "type": "string" }, "resolution": { "type": "string" }, "fps": { "type": "integer" }, "output_path": { "type": "string" } } }
+  }
+}
