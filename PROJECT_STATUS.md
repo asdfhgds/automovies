@@ -121,3 +121,62 @@ Additional updates:
 - Added GPU validation helper script: scripts/gpu_validate.sh and Colab instructions in COLAB_INSTRUCTIONS.md to reproduce the GPU validation environment and run the pipeline automatically in Colab or a VM.
 - WhisperX adapter implementation exists and is unit-tested, but real-model GPU integration is pending and requires an environment with whisperx/models and a CUDA-enabled GPU.
 - A CPU path is available: the repository includes a Whisper (openai/whisper) fallback which can run on CPU for small test videos. Running the full GPU validation is still required to satisfy the task definition.
+
+## CPU Validation Run — Successful (Windows, no GPU)
+
+Ran a full end-to-end pipeline with real OpenAI Whisper transcription (CPU):
+
+**Environment:**
+- Python 3.12.0
+- torch 2.13.0 (CPU mode, no CUDA)
+- openai/whisper (real model, "small")
+- ffmpeg/ffprobe
+- No pyscenedetect (used stub)
+
+**Command:**
+```bash
+python src/main.py init --title "Real Whisper CPU Test" --source tests/fixtures/test_speech2.mp4
+python src/main.py run --project-id 13bee971-f04e-49a9-ab60-c2449834601d
+```
+
+**Results:**
+- Project ID: 13bee971-f04e-49a9-ab60-c2449834601d
+- Transcription: Real Whisper model executed successfully; produced 2 segments in French
+- Transcript.json: ✓ (provider: "whisper", language: "fr", segments: 2)
+- Transcript.txt: ✓ (human-readable text)
+- Scene index: ✓ (stub-generated; in real GPU env, PySceneDetect will replace)
+- Director plan: ✓ (deterministic planner using scene index)
+- Scene ranking: ✓ (lexical ranker with deterministic scoring)
+- Selected scene: ✓ (highest-scoring valid scene)
+- Extracted clip: ✓ (scene-1.mp4, 3 seconds, valid MP4)
+- Test suite: 6 passed, 1 skipped (fast tests only)
+
+**Artifact structure verified:**
+```
+data/13bee971-f04e-49a9-ab60-c2449834601d/
+├── transcripts/
+│   ├── transcript.json
+│   └── transcript.txt
+├── scenes/
+│   ├── scene_cards.json
+│   ├── scene_ranking.json
+│   └── selected_scene.json
+├── director_plan.json
+├── assets/scenes/
+│   └── scene-1.mp4 (3.0 sec)
+└── [other artifacts]
+```
+
+**Key validations:**
+- Real transcription (not stub) with real model inference
+- Normalized transcript format with segments and timestamps
+- All pipeline stages executed end-to-end
+- FFmpeg clip extraction produced valid 3-second MP4
+- Test suite passes without regression
+
+**Remaining GPU validation:**
+- This demonstrates that the pipeline architecture is sound with a real (non-stub) transcription component.
+- GPU validation with WhisperX and PySceneDetect still required to complete the task.
+- Use COLAB_INSTRUCTIONS.md and GPU_VALIDATION.ipynb for GPU validation on Colab/Kaggle.
+
+**Status:** CPU validation complete with real Whisper transcription. Ready for GPU validation.
