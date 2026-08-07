@@ -33,10 +33,96 @@ def start_pipeline(project_id: str):
     except Exception as e:
         print(f"Scene indexing failed: {e}")
 
-    # Phase: Director planning
+    # Phase: Director planning (creative or deterministic)
+    plan_path = None
     try:
-        from director.planner import plan_director
-        plan_path = plan_director(project_dir)
+        import json
+        import os
+        
+        # Load scene index and transcript for director
+        scenes_file = project_dir / 'scenes' / 'scene_index.json'
+        transcript_file = project_dir / 'transcripts' / 'transcript.json'
+        
+        scene_index = []
+        transcript = {"segments": []}
+        
+        if scenes_file.exists():
+            with scenes_file.open('r', encoding='utf-8') as f:
+                scene_index = json.load(f)
+                # Handle both list and dict formats
+                if isinstance(scene_index, dict) and "scenes" in scene_index:
+                    scene_index = scene_index["scenes"]
+        
+        if transcript_file.exists():
+            with transcript_file.open('r', encoding='utf-8') as f:
+                transcript = json.load(f)
+        
+        # Get movie metadata
+        meta_path = project_dir / 'project_meta.json'
+        movie_metadata = {
+            "title": "Untitled",
+            "duration_sec": 0,
+            "source": source,
+        }
+        if meta_path.exists():
+            with meta_path.open('r', encoding='utf-8') as f:
+                meta = json.load(f)
+                movie_metadata["title"] = meta.get("title", "Untitled")
+        
+        # Try creative director first (if enabled)
+        use_creative = os.getenv('CREATIVE_DIRECTOR_ENABLED', 'false').lower() == 'true'
+        
+        if use_creative and scene_index and transcript:
+            try:
+                from director.creative_director import CreativeDirector
+                from director.providers.mock_llm import MockLLMProvider
+                
+                print("Using creative director (LLM-backed)...")
+                memory_dir = project_dir / 'memory'
+                provider = MockLLMProvider()  # TODO: Replace with real LLM provider
+                director = CreativeDirector(provider=provider, memory_dir=memory_dir)
+                
+                result = director.develop_production_plan(
+                    movie_metadata=movie_metadata,
+                    scene_index=scene_index,
+                    transcript=transcript,
+                )
+                
+                # Extract production plan and selected concept
+                production_plan = result.get("production_plan", {})
+                selected_concept = result.get("selected_concept", {})
+                
+                # Build director plan output compatible with existing downstream
+                director_plan = {
+                    "thesis": selected_concept.get("thesis", ""),
+                    "hook": selected_concept.get("hook", ""),
+                    "title": selected_concept.get("title", movie_metadata["title"]),
+                    "tone": selected_concept.get("tone", ""),
+                    "structure": production_plan.get("structure", []),
+                    "scenes_to_extract": production_plan.get("scenes", []),
+                    "creative_generation": True,
+                    "concept": selected_concept,
+                    "production_plan": production_plan,
+                    "all_concepts": result.get("generated_concepts", []),
+                }
+                
+                # Write director plan to file
+                plan_path = project_dir / "director_plan.json"
+                with plan_path.open('w', encoding='utf-8') as f:
+                    json.dump(director_plan, f, ensure_ascii=False, indent=2)
+                
+                print(f"Creative director thesis: {director_plan['thesis'][:80]}...")
+                
+            except Exception as e:
+                print(f"Creative director failed: {e}. Falling back to deterministic planner.")
+                use_creative = False
+        
+        # Fallback to deterministic planner
+        if not use_creative:
+            from director.planner import plan_director
+            plan_path = plan_director(project_dir)
+            print("Using deterministic director (fallback)")
+            
     except Exception as e:
         print(f"Director planning failed: {e}")
         plan_path = None
