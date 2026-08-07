@@ -62,11 +62,17 @@ def main():
     p_run = sub.add_parser('run', help='Run pipeline for a project')
     p_run.add_argument('--project-id', help='Existing project id')
 
+    p_doctor = sub.add_parser('doctor', help='Run environment health checks')
+
     args = parser.parse_args()
     if args.cmd == 'init':
         init_project(args)
     elif args.cmd == 'run':
         run(args)
+    elif args.cmd == 'doctor':
+        # lightweight import of doctor checks
+        from utils.doctor import print_report
+        print_report()
     else:
         parser.print_help()
 
