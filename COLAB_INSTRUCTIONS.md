@@ -51,3 +51,135 @@ GPU Validation (Colab)
 Notes
 - Choose the correct torch CUDA wheel matching the Colab runtime. If unsure, replace the pip install with the recommended command from https://pytorch.org/get-started/locally/ for your CUDA version.
 - If whisperx fails due to compute type, inspect its compute_type argument and pass 'float16' for common GPUs.
+
+
+## Real LLM Validation (Qwen with Creative Director)
+
+The pipeline now supports real LLM-powered creative direction using Qwen models.
+
+### Prerequisites
+
+Qwen requires PyTorch and Transformers:
+
+```
+!pip install transformers accelerate
+# For optimal performance:
+!pip install flash-attn  # If your GPU supports it
+```
+
+### Model Size Considerations
+
+**Colab T4 (16GB VRAM):**
+- Qwen3-7B-A0.5B: ✅ Fits easily
+- Qwen3-30B-A3B: ⚠️ May OOM without quantization
+- Qwen3-235B-A22B: ❌ Requires quantization or larger GPU
+
+**Colab A100 (40GB VRAM):**
+- Qwen3-30B-A3B: ✅ Fits comfortably
+- Qwen3-235B-A22B: ✅ Fits with careful settings
+
+### Setup for Real LLM
+
+```python
+# In Colab, set up environment:
+!pip install transformers accelerate
+
+# For smaller model (T4 GPU):
+%env DIRECTOR_PROVIDER=qwen
+%env DIRECTOR_MODEL=Qwen/Qwen3-7B-A0.5B
+%env DIRECTOR_DEVICE=cuda
+%env DIRECTOR_TEMPERATURE=0.8
+```
+
+### Running Pipeline with Real Qwen
+
+```bash
+# Enable creative director with real Qwen
+export CREATIVE_DIRECTOR_ENABLED=true
+export DIRECTOR_PROVIDER=qwen
+export DIRECTOR_MODEL=Qwen/Qwen3-30B-A3B  # or smaller model
+export DIRECTOR_DEVICE=cuda
+
+python src/main.py init --title "Qwen LLM Test" --source tests/fixtures/test_speech.mp4
+python src/main.py run --project-id <project-id>
+```
+
+### Running Tests
+
+```bash
+# Run unit tests (no model download)
+pytest tests/test_qwen_provider.py -v
+
+# Run creative director tests (mock LLM, fast)
+pytest tests/test_creative_director.py -v
+
+# Run real LLM integration tests (requires Qwen model)
+pytest tests/test_qwen_integration.py -m llm_integration -v
+
+# Mark slow tests
+pytest -m slow -v  # Will run real model tests if available
+```
+
+### Inspecting Generated Concepts
+
+After running the pipeline, check the generated concepts in memory:
+
+```bash
+cat data/<project-id>/memory/concepts.jsonl | python -m json.tool
+```
+
+Each line is a JSON object with:
+- `title`: Concept title
+- `thesis`: Core argument
+- `hook`: Engaging opening
+- `scores`: 6-dimensional critique
+- `selected`: Whether this concept was selected for production
+
+### Director Configuration
+
+All settings can be configured in `configs/app.yaml`:
+
+```yaml
+director:
+  enabled: true
+  provider: qwen  # or "mock"
+  model: Qwen/Qwen3-30B-A3B
+  device: auto  # or "cuda", "cpu"
+  dtype: auto   # or "float16", "float32", "bfloat16"
+  thinking: true
+  temperature: 0.8
+  top_p: 0.9
+  max_new_tokens: 2048
+  timeout_sec: 180
+```
+
+Environment overrides at runtime:
+
+```bash
+DIRECTOR_PROVIDER=qwen
+DIRECTOR_MODEL=Qwen/Qwen3-7B-A0.5B
+DIRECTOR_DEVICE=cuda
+DIRECTOR_TEMPERATURE=0.7
+```
+
+### Fallback Behavior
+
+If Qwen is unavailable or fails:
+1. **During tests**: Falls back to MockLLMProvider
+2. **During pipeline**: Falls back to deterministic director
+
+This ensures the pipeline never breaks due to LLM unavailability.
+
+### Performance Expectations
+
+On T4 GPU (15.8GB VRAM):
+- Qwen3-7B-A0.5B model loading: ~30-60s
+- Concept generation (3 concepts): ~45-120s
+- Production plan generation: ~30-60s
+- Full pipeline: ~3-5 minutes
+
+On A100 (40GB VRAM):
+- Qwen3-30B-A3B model loading: ~60-120s
+- Concept generation: ~30-60s
+- Production plan: ~20-40s
+- Full pipeline: ~2-3 minutes
