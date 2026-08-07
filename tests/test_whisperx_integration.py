@@ -2,6 +2,7 @@ import pytest
 import shutil
 from pathlib import Path
 import subprocess
+import json
 
 
 def has_whisperx():
