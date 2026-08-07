@@ -13,3 +13,15 @@ transcription:
   language: auto
   align: true
   diarization: false
+
+director:
+  enabled: true
+  provider: qwen
+  model: Qwen/Qwen3-30B-A3B
+  device: auto
+  dtype: auto
+  thinking: true
+  temperature: 0.8
+  top_p: 0.9
+  max_new_tokens: 2048
+  timeout_sec: 180

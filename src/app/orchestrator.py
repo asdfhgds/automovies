@@ -75,43 +75,51 @@ def start_pipeline(project_id: str):
         if use_creative and scene_index and transcript:
             try:
                 from director.creative_director import CreativeDirector
-                from director.providers.mock_llm import MockLLMProvider
+                from director.provider_factory import get_director_config_from_env, get_llm_provider_from_config
                 
                 print("Using creative director (LLM-backed)...")
-                memory_dir = project_dir / 'memory'
-                provider = MockLLMProvider()  # TODO: Replace with real LLM provider
-                director = CreativeDirector(provider=provider, memory_dir=memory_dir)
                 
-                result = director.develop_production_plan(
-                    movie_metadata=movie_metadata,
-                    scene_index=scene_index,
-                    transcript=transcript,
-                )
+                # Load provider from configuration
+                director_config = get_director_config_from_env()
+                provider = get_llm_provider_from_config(director_config)
                 
-                # Extract production plan and selected concept
-                production_plan = result.get("production_plan", {})
-                selected_concept = result.get("selected_concept", {})
-                
-                # Build director plan output compatible with existing downstream
-                director_plan = {
-                    "thesis": selected_concept.get("thesis", ""),
-                    "hook": selected_concept.get("hook", ""),
-                    "title": selected_concept.get("title", movie_metadata["title"]),
-                    "tone": selected_concept.get("tone", ""),
-                    "structure": production_plan.get("structure", []),
-                    "scenes_to_extract": production_plan.get("scenes", []),
-                    "creative_generation": True,
-                    "concept": selected_concept,
-                    "production_plan": production_plan,
-                    "all_concepts": result.get("generated_concepts", []),
-                }
-                
-                # Write director plan to file
-                plan_path = project_dir / "director_plan.json"
-                with plan_path.open('w', encoding='utf-8') as f:
-                    json.dump(director_plan, f, ensure_ascii=False, indent=2)
-                
-                print(f"Creative director thesis: {director_plan['thesis'][:80]}...")
+                if not provider:
+                    print("Failed to load LLM provider. Falling back to deterministic planner.")
+                    use_creative = False
+                else:
+                    memory_dir = project_dir / 'memory'
+                    director = CreativeDirector(provider=provider, memory_dir=memory_dir)
+                    
+                    result = director.develop_production_plan(
+                        movie_metadata=movie_metadata,
+                        scene_index=scene_index,
+                        transcript=transcript,
+                    )
+                    
+                    # Extract production plan and selected concept
+                    production_plan = result.get("production_plan", {})
+                    selected_concept = result.get("selected_concept", {})
+                    
+                    # Build director plan output compatible with existing downstream
+                    director_plan = {
+                        "thesis": selected_concept.get("thesis", ""),
+                        "hook": selected_concept.get("hook", ""),
+                        "title": selected_concept.get("title", movie_metadata["title"]),
+                        "tone": selected_concept.get("tone", ""),
+                        "structure": production_plan.get("structure", []),
+                        "scenes_to_extract": production_plan.get("scenes", []),
+                        "creative_generation": True,
+                        "concept": selected_concept,
+                        "production_plan": production_plan,
+                        "all_concepts": result.get("generated_concepts", []),
+                    }
+                    
+                    # Write director plan to file
+                    plan_path = project_dir / "director_plan.json"
+                    with plan_path.open('w', encoding='utf-8') as f:
+                        json.dump(director_plan, f, ensure_ascii=False, indent=2)
+                    
+                    print(f"Creative director thesis: {director_plan['thesis'][:80]}...")
                 
             except Exception as e:
                 print(f"Creative director failed: {e}. Falling back to deterministic planner.")
