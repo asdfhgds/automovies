@@ -1,8 +1,14 @@
 """Orchestrator: run MVP pipeline using local stubs."""
 from pathlib import Path
 import time
+import sys
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+SRC = ROOT / 'src'
+
+# Ensure src directory is in Python path for imports
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 
 def start_pipeline(project_id: str):
