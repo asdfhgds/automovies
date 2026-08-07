@@ -114,6 +114,8 @@ Status: This task (Integrate scene ranking and implement clip extraction) is com
 Additional updates:
 
 - Added optional WhisperX integration test at tests/test_whisperx_integration.py (marker: integration). The test is optional and runs only when explicitly requested (pytest -m integration).
-- Committed the integration test locally; attempted git push but remote push failed due to permission (HTTP 403). Local commits exist; see GIT_PUSH_INSTRUCTIONS.md for pushing from a machine with credentials.
-- Unit test suite (fast tests): 4 passed, 2 skipped in this environment.
-- WhisperX adapter implementation exists and is unit-tested, but real-model integration is pending and requires an environment with whisperx/models and optionally a GPU.
+- Added an end-to-end GPU integration test at tests/integration/test_e2e_integration.py (marker: integration). This runs the full pipeline from WhisperX through PySceneDetect, selection and FFmpeg extraction; it requires a small test video fixture at tests/fixtures/test_speech.mp4 and an environment with whisperx, pyscenedetect, and ffmpeg available.
+- Committed the integration tests locally; attempted git push but remote push failed due to permission (HTTP 403). Local commits exist; see GIT_PUSH_INSTRUCTIONS.md for pushing from a machine with credentials.
+- Unit test suite (fast tests): 5 passed, 2 skipped in this environment.
+- Added a doctor command: python src/main.py doctor — reports Python version, torch/CUDA/GPU info, ffmpeg/ffprobe, whisperx, pyscenedetect, and nvidia-smi availability.
+- WhisperX adapter implementation exists and is unit-tested, but real-model GPU integration is pending and requires an environment with whisperx/models and a CUDA-enabled GPU.
