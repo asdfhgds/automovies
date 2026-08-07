@@ -1,0 +1,61 @@
+# Important: GPU Validation Required
+
+I've created a fully-automated GPU validation setup. However, I cannot run the GPU validation from this CPU-only environment.
+
+## What I've Done
+
+1. **GPU_VALIDATION.ipynb** — A complete Colab notebook that:
+   - Installs all dependencies (PyTorch+CUDA, WhisperX, PySceneDetect, ffmpeg)
+   - Clones the repository
+   - Runs `python src/main.py doctor` (environment check)
+   - Generates a test video fixture
+   - Runs the full pipeline end-to-end
+   - Validates all artifacts
+   - Runs integration tests
+   - Produces a summary report
+
+2. **GPU_VALIDATION_README.md** — Quick-start guide with:
+   - Step-by-step Colab instructions
+   - Expected output structure
+   - Common troubleshooting
+
+3. **scripts/gpu_validate.sh** — Alternative shell script for Linux/Colab environments
+
+## What You Need to Do
+
+Open the notebook in Google Colab (or your preferred GPU environment) and run it:
+
+```
+1. GPU_VALIDATION.ipynb → Open in Colab
+2. Runtime → Change runtime type → GPU
+3. Execute cells in order (Shift+Enter or Runtime → Run all)
+4. Copy the output summary and project ID
+```
+
+## After GPU Validation
+
+1. Paste the project ID and GPU doctor output here
+2. I'll:
+   - Identify any failures
+   - Fix integration issues in the repository
+   - Re-run the notebook until it passes
+   - Update PROJECT_STATUS.md
+   - Provide the final validation report
+
+## Why I Cannot Run It Here
+
+This environment:
+- CPU-only (no CUDA GPU)
+- Windows PowerShell (not Colab/Linux)
+- Cannot access external GPU resources without explicit configuration
+
+## Minimal Time Estimate
+
+GPU Colab validation typically takes 5-10 minutes once you open the notebook and click "Run all".
+
+Please run the notebook and share:
+1. The final summary output
+2. Any error messages (if any)
+3. Confirmation of artifacts produced
+
+Then I'll either confirm success or fix any issues found.
