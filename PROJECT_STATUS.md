@@ -319,3 +319,155 @@ Extracted scene-1.mp4 (valid H.264/AAC)
 - [ ] Or proceed to next feature (e.g., TTS integration, visual generation stub → real)
 - The foundation is proven to work; GPU run would optimize transcription speed using WhisperX's parallelized inference
 - No architectural changes needed; current design supports both CPU and GPU environments seamlessly
+
+---
+
+## Creative Director Framework — IMPLEMENTED
+
+Replaced deterministic thesis generator with LLM-backed creative director framework.
+
+**Components Implemented:**
+
+1. **CreativeMemory** (`src/director/memory.py`)
+   - JSONL-based persistent storage of previous concepts
+   - `add_concept(concept)` — appends to concept memory
+   - `get_concepts_summary(n=5)` — retrieves recent concepts for LLM context
+   - Enables creative consistency and prevents repetition
+
+2. **ConceptCritic** (`src/director/critic.py`)
+   - Multi-dimensional evaluation framework
+   - Scores on 6 dimensions: originality, thesis_strength, evidence_strength, visual_potential, audience_curiosity, feasibility
+   - Scoring heuristics: text length, keyword presence, vagueness patterns (deterministic, no ML required)
+   - `critique(concept)` → dict with individual scores + overall average
+   - Fast and testable without external dependencies
+
+3. **LLMProvider Interface** (`src/director/providers/base.py`)
+   - Abstract base class defining provider contract
+   - Methods: `generate_concepts()`, `refine_concept()`, `generate_production_plan()`
+   - Allows pluggable LLM backends (Anthropic, OpenAI, Replicate, Ollama, etc.)
+
+4. **MockLLMProvider** (`src/director/providers/mock_llm.py`)
+   - Deterministic mock implementation for testing
+   - Generates 3-5 diverse philosophical concepts per call
+   - Examples: thematic analysis, character psychology, metanarrative examination
+   - No API calls; fast unit test execution
+   - Serves as reference implementation for real providers
+
+5. **CreativeDirector** (`src/director/creative_director.py`)
+   - Main orchestrator: memory → generate concepts → critique → select best → produce plan
+   - `develop_production_plan(scene_index, previous_concepts)` → production plan JSON
+   - Stores generated concepts in memory for future reference
+   - Graceful error handling with fallback to deterministic planner
+
+6. **Dual-Mode Planner** (`src/director/planner.py` — refactored)
+   - `plan_director()` routes to creative (LLM) or deterministic path
+   - Environment gate: `CREATIVE_DIRECTOR_ENABLED=true` to activate creative mode
+   - Fallback to deterministic planner if creative director unavailable
+   - Ensures pipeline never breaks due to LLM errors
+
+**Test Suite — 10 Tests, All Passing:**
+
+```
+tests/test_creative_director.py
+├── TestCreativeMemory (3 tests)
+│   ├── test_add_and_retrieve_concept
+│   ├── test_concepts_summary_truncation
+│   └── test_append_to_existing_file
+├── TestConceptCritic (4 tests)
+│   ├── test_critique_good_concept
+│   ├── test_critique_vague_concept
+│   ├── test_critique_weak_evidence
+│   └── test_all_scores_zero_to_one
+├── TestMockLLMProvider (2 tests)
+│   ├── test_generates_multiple_concepts
+│   └── test_production_plan_structure
+└── TestCreativeDirector (1 test)
+    └── test_develop_production_plan_with_memory
+```
+
+**Architecture Decisions:**
+
+- **Mock-first design**: MockLLMProvider allows complete unit test coverage without API calls or GPU
+- **Deterministic critic**: Scoring uses text heuristics (not ML), keeping critic fast and testable
+- **Environment-gated**: `CREATIVE_DIRECTOR_ENABLED` flag allows gradual rollout; defaults to deterministic fallback
+- **Memory persistence**: JSONL format supports append-only storage without parsing full file
+- **No API keys in code**: Real LLM providers will read from environment variables/config
+- **Modular providers**: Adding new LLM backend requires only creating new provider class (Anthropic, OpenAI, etc.)
+
+**Status:**
+
+- [x] CreativeMemory implemented and tested
+- [x] ConceptCritic with 6-dimensional scoring implemented and tested
+- [x] LLMProvider interface defined
+- [x] MockLLMProvider with deterministic concept generation implemented and tested
+- [x] CreativeDirector orchestrator implemented and tested
+- [x] Dual-mode planner with environment gate implemented
+- [x] Unit tests all passing (10/10)
+- [ ] Real LLM provider integration (Anthropic/OpenAI/Replicate/Ollama) — NOT YET STARTED
+- [ ] End-to-end integration test with creative concepts — NOT YET STARTED
+- [ ] Integration into pipeline orchestrator — NOT YET STARTED
+
+**Files Changed/Added:**
+
+- Created: `src/director/memory.py`
+- Created: `src/director/critic.py`
+- Created: `src/director/providers/base.py`
+- Created: `src/director/providers/mock_llm.py`
+- Created: `src/director/providers/__init__.py`
+- Created: `src/director/creative_director.py`
+- Created: `tests/test_creative_director.py`
+- Modified: `src/director/planner.py` (added dual-mode support)
+
+**Test Results:**
+
+```bash
+pytest -q
+# Output:
+# 17 passed, 1 skipped, 3 warnings in 146.44s
+# - 7 existing tests (scene ranking, selection, extraction, transcription, PySceneDetect)
+# - 10 new tests (creative director suite)
+```
+
+**Next Steps for Creative Director:**
+
+1. **Implement real LLM provider**
+   - Choose provider: Anthropic Claude (recommended), OpenAI, Replicate, or Ollama
+   - Create `src/director/providers/anthropic_provider.py` (or equivalent)
+   - Implement `generate_concepts()` with real API calls
+   - Add configuration for model selection/parameters
+   - Handle API errors and timeouts gracefully
+
+2. **End-to-end creative director integration test**
+   - Create marked integration test (pytest.mark.integration)
+   - Run full pipeline with real LLM provider
+   - Verify concepts are specific and properly structured
+   - Verify production plan format and timing
+
+3. **Integrate into pipeline orchestrator**
+   - Update `src/app/orchestrator.py` to use new CreativeDirector
+   - Ensure director_plan.json format compatible with downstream stages
+   - Run full pipeline E2E test
+
+4. **Documentation**
+   - Document creative director architecture
+   - Document real provider setup and configuration
+   - Add example generated concepts
+   - Update next recommended task
+
+**Current Limitations:**
+
+- MockLLMProvider is deterministic and follows predictable patterns; real LLM will produce varied concepts
+- Critic scoring uses text heuristics; no semantic understanding
+- No built-in retry logic or rate limiting for LLM calls (add for production use)
+- No prompt engineering optimization yet
+- No multi-turn refinement (LLM generates, human/critic refines, LLM regenerates)
+
+**Architecture Ready For:**
+
+- Swapping any LLM provider without changing core logic
+- Adding real producer feedback loop (critic → refine → regenerate)
+- Storing concept memory for analysis and trending
+- A/B testing different concept generation strategies
+- Gradual rollout via environment flag
+
+---
