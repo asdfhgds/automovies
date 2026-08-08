@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": ["project_id", "assets"],
+  "properties": {
+    "project_id": { "type": "string" },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["asset_id", "type", "prompt", "linked_section_id"],
+        "properties": {
+          "asset_id": { "type": "string" },
+          "type": { "type": "string", "enum": ["image", "video", "motion_graphic", "title_card", "overlay"] },
+          "prompt": { "type": "string" },
+          "linked_section_id": { "type": "string" },
+          "duration_sec": { "type": "integer" },
+          "engine": { "type": "string" }
+        }
+      }
+    }
+  }
+}

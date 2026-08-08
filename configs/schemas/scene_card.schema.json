@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "required": [
+    "scene_id",
+    "title_id",
+    "start_sec",
+    "end_sec",
+    "transcript",
+    "summary",
+    "shot_count",
+    "key_frames"
+  ],
+  "properties": {
+    "scene_id": { "type": "string" },
+    "title_id": { "type": "string" },
+    "start_sec": { "type": "number" },
+    "end_sec": { "type": "number" },
+    "transcript": { "type": "string" },
+    "summary": { "type": "string" },
+    "shot_count": { "type": "integer" },
+    "key_frames": { "type": "array", "items": { "type": "string" } },
+    "speaker_labels": { "type": "array", "items": { "type": "string" } },
+    "keywords": { "type": "array", "items": { "type": "string" } }
+  }
+}

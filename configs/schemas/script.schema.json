@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": ["project_id", "voiceover_text", "sections"],
+  "properties": {
+    "project_id": { "type": "string" },
+    "voiceover_text": { "type": "string" },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["section_id", "text"],
+        "properties": {
+          "section_id": { "type": "string" },
+          "text": { "type": "string" },
+          "estimated_seconds": { "type": "integer" }
+        }
+      }
+    },
+    "cta": { "type": "string" },
+    "style_notes": { "type": "string" }
+  }
+}

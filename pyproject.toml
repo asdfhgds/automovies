@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autonomous-movie-studio"
+version = "0.1.0"
+description = "MVP scaffold for an autonomous movie/TV commentary video studio"
+authors = [ { name = "Copilot App" } ]
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.0"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "llm_integration: marks tests as requiring real LLM (deselect with '-m \"not llm_integration\"')",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests"
+]

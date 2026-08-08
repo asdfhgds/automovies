@@ -1,0 +1,1 @@
+# Scene indexing package (stubs)
