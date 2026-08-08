@@ -1,0 +1,1 @@
+- [Local media pipeline](local-media-pipeline.md) — downstream rendering requires mock providers to emit valid media files, not signature-only placeholders.

@@ -74,8 +74,9 @@ class Timeline:
     
     def get_track(self, track_type: TrackType) -> Optional[TimelineTrack]:
         """Get first track of a given type."""
+        requested_type = getattr(track_type, "value", track_type)
         for track in self.tracks:
-            if track.track_type == track_type:
+            if track.track_type == track_type or track.track_type.value == str(requested_type):
                 return track
         return None
     

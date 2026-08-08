@@ -334,9 +334,11 @@ python src/main.py run --project-id <id>
 ## Next Steps (Priority Order)
 
 ### 1. Timeline-Based Rendering Integration
-- Connect existing orchestrator to timeline system
-- Implement renderer that consumes Timeline objects
-- Add FFmpeg command generation from timeline
+- ✅ Connect existing orchestrator to timeline system
+- ✅ Implement renderer that consumes Timeline objects
+- ✅ Add FFmpeg command generation from timeline
+- ✅ Persist `timeline/timeline.json` and `renders/render_job.json`
+- ✅ Produce a valid H.264/AAC MP4 in the local profile
 
 ### 2. Evidence-Driven Scene Selection
 - Extend director to produce evidence requirements
@@ -344,9 +346,10 @@ python src/main.py run --project-id <id>
 - Update selected_scene.json → selected_scenes.json
 
 ### 3. Script Generation Integration
-- Integrate script generation provider into orchestrator
-- Create real script provider when LLM model available
-- Update timeline with narration sections
+- ✅ Integrate deterministic script generation into orchestrator
+- ✅ Generate narration sections from the director thesis and scene index
+- ✅ Update the timeline with voiceover and subtitle sections
+- ⏳ Create a real script provider when an LLM model is available
 
 ### 4. Real GPU Validation (Colab)
 - Clone repo into Colab with GPU
@@ -423,7 +426,7 @@ TOTAL: 40+ tests passing, 0 failures
 ✅ **Testing**: Comprehensive, fast
 ✅ **Documentation**: Profiles, provider system, configuration
 ⏳ **GPU Validation**: Ready (needs Colab execution)
-⏳ **Timeline Rendering**: Architecture ready, integration pending
+✅ **Timeline Rendering**: Local FFmpeg rendering integrated and validated
 ⏳ **Multi-Scene Selection**: Architecture prepared
 ⏳ **Real TTS/Image/Video**: Mocks complete, integration pending
 
