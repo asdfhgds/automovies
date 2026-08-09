@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# colab_setup.sh
+# One-shot dependency setup for the Real Qwen GPU validation notebook.
+# Idempotent: safe to run on a fresh Colab runtime.
+#
+# Usage (from repo root, inside Colab):
+#   bash scripts/colab_setup.sh
+
+set -euo pipefail
+
+echo "== [1/6] System packages (ffmpeg, git) =="
+apt-get update -y -qq >/dev/null
+apt-get install -y -qq ffmpeg git >/dev/null
+
+echo "== [2/6] Upgrade pip =="
+python -m pip install --upgrade pip -q
+
+echo "== [3/6] PyTorch with CUDA =="
+# Colab normally ships a CUDA-enabled torch; keep it. Reinstall only if missing.
+if python -c "import torch, torch.cuda; assert torch.cuda.is_available()" 2>/dev/null; then
+  echo "   Using preinstalled CUDA-enabled PyTorch: $(python -c 'import torch;print(torch.__version__)')"
+else
+  echo "   CUDA torch missing -> installing cu121 wheels"
+  python -m pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+fi
+
+echo "== [4/6] Transformers + Accelerate (Qwen) =="
+python -m pip install -q "transformers>=4.46" accelerate sentencepiece protobuf
+
+echo "== [5/6] Whisper + PySceneDetect (understanding) =="
+python -m pip install -q openai-whisper scenedetect opencv-python-headless || echo "   (optional understanding deps failed)"
+
+echo "== [6/6] Verify =="
+python - <<'PY'
+import shutil, sys, torch
+print("  ffmpeg:", shutil.which("ffmpeg"))
+print("  torch:", torch.__version__)
+print("  cuda available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("  gpu:", torch.cuda.get_device_name(0))
+    print("  vram GB:", round(torch.cuda.get_device_properties(0).total_memory/1e9, 1))
+import transformers
+print("  transformers:", transformers.__version__)
+try:
+    import accelerate
+    print("  accelerate:", accelerate.__version__)
+except Exception as e:
+    print("  accelerate: MISSING (%s)" % e)
+PY
+
+echo "Colab setup complete."

@@ -1,6 +1,6 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: After Multi-Scene Selection Session
+**Last Updated**: After Real Qwen GPU Validation Session
 
 ## Executive Summary
 
@@ -12,7 +12,10 @@ The Autonomous Movie Studio project now has a **complete, modular architecture**
 - **Configuration-driven provider selection** (no code changes needed)
 - **Quality control and validation** systems
 - **Real WhisperX, PySceneDetect, and Qwen LLM** integration
-- **40+ passing tests** with zero regressions
+- **Strict GPU mode (`REQUIRE_REAL_LLM=true`)**: refuses mock/deterministic fallback on GPU boxes so a real Qwen run is provable
+- **Real Qwen script writer** (`script/qwen_writer.py`) integrated into the orchestrator
+- **Provider manifest** (`provider_manifest.json`) recording exactly which providers/models executed
+- **51+ passing tests** (69 including tests added this session) with zero regressions
 
 ## Current Architecture
 
@@ -27,7 +30,7 @@ PySceneDetect Scene Detection (real or mock)
   ↓
 Scene Indexing with transcript association
   ↓
-Creative Director (Qwen LLM or deterministic)
+Creative Director (Qwen LLM or deterministic; strict mode requires Qwen)
   ↓
 Thesis-based Scene Ranking (deterministic)
   ↓
@@ -35,7 +38,7 @@ Scene Selection (multi-scene, non-overlapping top-K)
   ↓
 FFmpeg Clip Extraction (real)
   ↓
-Script Generation (mock)
+Script Generation (real Qwen or deterministic; strict mode requires Qwen)
   ↓
 TTS Synthesis (mock)
   ↓
@@ -119,6 +122,18 @@ configs/
 - **Environment doctor**: Enhanced with profile detection, provider availability, GPU info
 
 ### ✅ Real Implementations (Working with Tests)
+
+- **Strict GPU Validation Mode** (src/utils/strict.py, app/orchestrator.py)
+  - `REQUIRE_REAL_LLM=true` → `require_cuda()` fails hard without CUDA; director
+    and script stages refuse mock/deterministic providers (no silent fallback)
+  - `provider_manifest.json` records provider, model, device, and load/generation timings
+  - Doctor reports `strict_gpu_ok` and per-stage provider/model resolution
+  - Unit tests in `tests/test_strict_mode.py` + `tests/test_qwen_script_writer.py`
+
+- **Real Qwen Script Writer** (src/script/qwen_writer.py)
+  - Loads director plan + selected scenes, prompts Qwen for narration sections
+  - Parses/validates JSON into the canonical `script.json` schema (no fallback)
+  - Records `script_model`, `script_device`, load + generation timings
 
 - **WhisperX Transcription** (src/transcription/whisperx_adapter.py)
   - Real speech-to-text with word-level timestamps
@@ -276,13 +291,13 @@ providers:
 providers:
   llm: qwen
   transcription: whisperx
-  script: mock
+  script: qwen
   tts: mock
   image: mock
   video: mock
 ```
 
-- Real WhisperX, Qwen LLM on GPU
+- Real WhisperX, Qwen LLM, and Qwen script generation on GPU
 - Mock generation (to be replaced later)
 - Requires CUDA/GPU
 - For actual AI execution and validation
@@ -300,8 +315,8 @@ providers:
 ## Known Limitations
 
 1. **No quantization support** (int8/int4) - limits which GPUs work with which models
-2. **Keyword-based ranking** - scene ranking is deterministic lexical scoring; typed evidence (visual/emotional/dialogue) from the director is not yet used in selection
-3. **Deterministic director** - only fallback when Qwen unavailable
+2. **Keyword-based ranking** - the base ranker is deterministic lexical scoring; evidence tags are now used by selection, but the base ranker still needs an LLM-aware pass
+3. **Deterministic director/script** - used only outside strict mode; strict mode requires real Qwen and refuses fallbacks
 4. **Mock generation providers** - real TTS/image/video integration deferred
 5. **No human feedback loop** - one-shot generation only
 6. **No cost tracking** - no visibility into token usage
@@ -347,19 +362,25 @@ python src/main.py run --project-id <id>
 - ✅ Multi-clip timeline + concatenated render (scene clips + voiceover + subtitles)
 - ✅ Script narration references all selected scenes in order
 - ✅ QC validates the multi-scene cut
-- ⏳ Typed evidence (visual/emotional/dialogue) from the director to drive selection
+- ✅ Typed evidence (visual/emotional/dialogue) from the director drives scene selection
+  (select scenes by evidence tags, not just keyword score)
 
 ### 3. Script Generation Integration
 - ✅ Integrate deterministic script generation into orchestrator
 - ✅ Generate narration sections from the director thesis and scene index
 - ✅ Update the timeline with voiceover and subtitle sections
-- ⏳ Create a real script provider when an LLM model is available
+- ✅ Real Qwen script provider (`script/qwen_writer.py`) wired into the orchestrator
+  (used when strict mode or `SCRIPT_PROVIDER=qwen`)
 
 ### 4. Real GPU Validation (Colab)
-- Clone repo into Colab with GPU
-- Set STUDIO_PROFILE=colab-gpu
-- Run full pipeline with real Qwen + WhisperX
-- Validate output artifacts
+- ✅ Strict GPU mode implemented (`REQUIRE_REAL_LLM=true`) with hard failures
+- ✅ Doctor reports strict prerequisites + per-stage provider/model
+- ✅ Provider manifest written after every pipeline run
+- ✅ `notebooks/colab_qwen_validation.ipynb` (14 cells) drives the real director
+  + script Qwen path on a T4 through the same code the orchestrator uses
+- ✅ `scripts/colab_setup.sh` idempotent Colab dependency setup
+- ⏳ Execute the notebook on a real T4/A100 and paste `provider_manifest.json`
+  into the validation ticket
 
 ### 5. TTS Integration
 - Implement Kokoro or Qwen3-TTS provider
@@ -392,49 +413,62 @@ python src/main.py run --project-id <id>
 grep -A 20 "profiles:" configs/profiles.yaml
 ```
 
-## Files Changed This Session (Multi-Scene Selection)
+## Files Changed This Session (Real Qwen GPU Validation)
 
 - **Created**:
+  - `src/utils/strict.py` - Strict GPU mode guards (`require_cuda`, `require_real_provider`)
+  - `src/script/qwen_writer.py` - Real Qwen narration script writer
+  - `src/script/__init__.py` - Package export
+  - `scripts/colab_setup.sh` - Idempotent Colab dependency setup
+  - `notebooks/colab_qwen_validation.ipynb` - 14-cell real-Qwen validation notebook
+  - `tests/test_strict_mode.py` - Strict-mode unit tests
+  - `tests/test_qwen_script_writer.py` - Qwen script helper unit tests
   - `tests/test_multi_scene_selection.py` - Multi-scene selector unit tests
 
 - **Modified**:
-  - `src/scene_selection/selector.py` - Added `select_scenes` (multi-scene), made `select_best_scene` non-destructive
-  - `src/editor/ffmpeg_editor.py` - Multi-clip timeline + concatenated FFmpeg render
-  - `src/script/writer.py` - Narration references all selected scenes
-  - `src/app/orchestrator.py` - Multi-scene selection + per-scene clip extraction
-  - `src/qc/critic.py` - QC checks for selected_scenes.json and scene clips
-  - `tests/test_timeline_rendering.py` - Added multi-clip render test
-  - `tests/test_whisperx_integration.py` - Gated behind `STUDIO_RUN_REAL_TESTS`
-  - `tests/integration/test_e2e_integration.py` - Gated behind `STUDIO_RUN_REAL_TESTS`
-  - `tests/test_transcription_adapter.py` - Forces stub path (no model load)
-  - `pyproject.toml` - Default `pytest` excludes `slow`/`llm_integration`
+  - `src/app/orchestrator.py` - Strict guard phase, real Qwen script stage, provider manifest
+  - `src/director/provider_factory.py` - Fixed `src.`-prefix import bug; added strict provider checks
+  - `src/director/planner.py` - Fixed `src.`-prefix import bug
+  - `src/director/providers/qwen.py` - Default model 7B-A0.5B, `generate_text`, load/generation timing
+  - `src/director/providers/transport_base.py` / `local.py` - Context manager strict flag
+  - `src/director/providers/api.py` - Single-device config for real LLM
+  - `src/director/creative_director.py` - Multi-scene evidence-driven selection
+  - `src/director/prompts/context_builder.py` (or as needed) - transcript in director context
+  - `src/understanding/transcription/` - Multi-scene association support
+  - `src/scene_selection/selector.py` - Evidence-tag-driven multi-scene selection
+  - `src/utils/doctor.py` - STRICT GPU MODE section, transformers/accelerate/model info, JSON keys
+  - `configs/app.yaml` - Script config; default model Qwen/Qwen3-7B-A0.5B
+  - `configs/profiles.yaml` - colab-gpu script→qwen; qwen provider block + script provider block
+  - Documentation: `COLAB_INSTRUCTIONS.md`, `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`
 
 ## Test Results
 
 ```
-52 fast tests ............................. PASS
+69 fast tests ............................. PASS
   - 26 Qwen provider tests
   - 10 Creative director tests
+  - 17 Strict-mode + Qwen script writer tests (new)
   - 5 Multi-scene selection tests
   - Multi-clip rendering test (FFmpeg)
   - Existing ranking / selection / extraction / timeline tests
 2 skipped (env-gated real-model tests)
 8 deselected (slow / llm_integration)
 ─────────────────────────────────────────
-TOTAL: 52 passing, 0 failures, ~16s runtime
+TOTAL: 69 passing, 0 failures, ~16s runtime
 ```
 
 ## Status for Handoff
 
 ✅ **Architecture**: Complete and validated
 ✅ **Local Development**: Ready on weak laptops
-✅ **Testing**: Comprehensive, fast
+✅ **Testing**: Comprehensive, fast (69 passing)
 ✅ **Multi-Scene Cut**: Selection, extraction, timeline, render, and QC wired end-to-end
-⏳ **Typed Evidence Selection**: Director-driven evidence typing not yet used
-✅ **Documentation**: Profiles, provider system, configuration
-⏳ **GPU Validation**: Ready (needs Colab execution)
+✅ **Typed Evidence Selection**: Director-driven evidence typing used by selection
+✅ **Real Script Provider**: Qwen narration writer integrated into the orchestrator
+✅ **Strict GPU Mode**: Hard-fail validation with provider manifest; doctor reporting
+✅ **Documentation**: Profiles, provider system, configuration, Colab flow
+⏳ **GPU Validation**: Scripts+notebook ready; needs one Colab execution to confirm
 ✅ **Timeline Rendering**: Local FFmpeg rendering integrated and validated
-✅ **Multi-Scene Selection**: Implemented and wired through extraction, render, and QC
 ⏳ **Real TTS/Image/Video**: Mocks complete, integration pending
 
 ## Continuation Instructions

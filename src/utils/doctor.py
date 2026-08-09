@@ -93,6 +93,7 @@ def _get_provider_status():
     # Script providers
     providers['script'] = {
         'mock': True,  # Always available
+        'qwen': _check_import('transformers'),
     }
     
     # TTS providers
@@ -127,15 +128,29 @@ def run_checks():
     out['whisper'] = _check_import('whisper')
     out['pyscenedetect'] = _check_import('scenedetect') or _check_import('pyscenedetect')
     out['transformers'] = _check_import('transformers')
+    out['accelerate'] = _check_import('accelerate')
     # nvidia-smi availability
     out['nvidia_smi'] = shutil.which('nvidia-smi') is not None
-    
+
     # Profile and providers
     profile, profile_note = _detect_profile()
     out['active_profile'] = profile
     out['profile_note'] = profile_note
     out['providers'] = _get_provider_status()
-    
+
+    # Strict GPU validation mode metadata
+    require_real_llm = os.getenv('REQUIRE_REAL_LLM', 'false').lower() == 'true'
+    out['require_real_llm'] = require_real_llm
+    out['strict_gpu_mode'] = require_real_llm and profile == 'colab-gpu'
+    out['director_provider'] = os.getenv('DIRECTOR_PROVIDER', 'qwen' if require_real_llm else 'mock')
+    out['director_model'] = os.getenv('DIRECTOR_MODEL', 'Qwen/Qwen3-7B-A0.5B')
+    out['script_provider'] = os.getenv('SCRIPT_PROVIDER', 'qwen' if require_real_llm else 'mock')
+    out['script_model'] = os.getenv('SCRIPT_MODEL', out['director_model'])
+
+    cuda_ok = out['torch'].get('cuda_available', False)
+    transformers_ok = out['transformers']
+    out['strict_gpu_ok'] = not require_real_llm or (cuda_ok and transformers_ok and out['accelerate'])
+
     return out
 
 
@@ -177,6 +192,22 @@ def print_report(report=None):
     else:
         print('PyTorch: [NOT INSTALLED]')
     print(f"Transformers: {'[OK] FOUND' if report.get('transformers') else '[MISSING]'}")
+    print(f"Accelerate: {'[OK] FOUND' if report.get('accelerate') else '[MISSING]'}")
+    
+    print('\n' + '-'*60)
+    print('STRICT GPU MODE (REQUIRE_REAL_LLM)')
+    print('-'*60)
+    print(f"REQUIRE_REAL_LLM: {'[ON]' if report.get('require_real_llm') else '[OFF]'}")
+    print(f"Active profile: {report.get('active_profile')}")
+    print(f"Strict mode (LLM + colab-gpu): {'[ON]' if report.get('strict_gpu_mode') else '[OFF]'}")
+    print(f"Director provider: {report.get('director_provider')} | model: {report.get('director_model')}")
+    print(f"Script provider:   {report.get('script_provider')} | model: {report.get('script_model')}")
+    if report.get('require_real_llm'):
+        if report.get('strict_gpu_ok'):
+            print("[OK] Strict GPU validation prerequisites satisfied (CUDA + Transformers + Accelerate)")
+        else:
+            print("[FATAL] Strict mode required but CUDA/Transformers/Accelerate missing. "
+                  "GPU validation CANNOT proceed with mocks.")
     
     print('\n' + '-'*60)
     print('MODELS & ADAPTERS')

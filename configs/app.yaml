@@ -17,11 +17,20 @@ transcription:
 director:
   enabled: true
   provider: qwen
-  model: Qwen/Qwen3-30B-A3B
+  model: Qwen/Qwen3-7B-A0.5B
   device: auto
   dtype: auto
-  thinking: true
+  thinking: false
   temperature: 0.8
   top_p: 0.9
   max_new_tokens: 2048
   timeout_sec: 180
+
+script:
+  provider: qwen
+  model: Qwen/Qwen3-7B-A0.5B
+  device: auto
+  dtype: auto
+  thinking: false
+  temperature: 0.7
+  max_new_tokens: 1024

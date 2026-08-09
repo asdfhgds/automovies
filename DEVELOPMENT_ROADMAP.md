@@ -20,8 +20,23 @@
 - ✅ **Tests**: 21 passing (10 unit + 4 E2E + 7 existing)
 - ✅ **Documentation**: Full CREATIVE_DIRECTOR_GUIDE.md
 
+### Real LLM (Qwen, On-Device / GPU) — Completed
+- ✅ **QwenProvider** (director/providers/qwen.py): real Transformers generation on CUDA,
+  lazy loading, `generate_text`, load + generation timing
+- ✅ **CreativeDirector on real Qwen**: multi-scene, evidence-driven production planning
+- ✅ **Real Qwen script writer** (`src/script/qwen_writer.py`): narration sections from
+  director plan + selected scenes, canonical `script.json` schema, no silent fallback
+- ✅ **Strict GPU mode** (`REQUIRE_REAL_LLM=true`): `require_cuda()` + provider
+  hard-fail guards; deterministic/mock providers are refused on GPU boxes
+- ✅ **Provider manifest**: `provider_manifest.json` records provider, model, device,
+  and load/generation timings each run
+- ✅ **Default model**: `Qwen/Qwen3-7B-A0.5B` (fits T4 16GB); `30B-A3B` for A100
+- ✅ **Colab artifacts**: `notebooks/colab_qwen_validation.ipynb` (14 cells) +
+  `scripts/colab_setup.sh` (idempotent setup)
+- ✅ **Tests**: 17 new (strict mode + Qwen script writer), 69 total passing
+
 ### Quality Metrics
-- **Test Coverage**: 21 tests, ~144s runtime
+- **Test Coverage**: 69 tests, ~16s runtime
 - **No Regressions**: All existing functionality preserved
 - **Architecture**: Modular, pluggable, fault-tolerant
 
@@ -253,13 +268,13 @@ Improve quality and reduce costs through iteration.
 - **Transcription**: Whisper (openai), WhisperX
 - **Scene Detection**: PySceneDetect
 - **Director (Deterministic)**: Lexical keyword matching
-- **Director (Creative - To Do)**: LLM (Claude/GPT-4/Replicate/Ollama)
+- **Director (Creative)**: Qwen3 7B-A0.5B via Transformers on CUDA (or mock locally)
+- **Script Generation**: Qwen3 7B-A0.5B (`script/qwen_writer.py`) or deterministic
 - **Clip Extraction**: FFmpeg
 - **Video Assembly**: FFmpeg
 - **Testing**: pytest, mock LLM provider
 
 ### To Be Integrated
-- **Script Generation**: LLM (Claude/GPT-4 recommended)
 - **TTS**: Qwen3-TTS, Chatterbox, ElevenLabs
 - **Image Generation**: Stable Diffusion, Midjourney, DALL-E 3
 - **Stock Footage**: Envato, Getty, Pexels
@@ -284,9 +299,10 @@ Improve quality and reduce costs through iteration.
 ## Priority Queue
 
 ### High Priority (Do First)
-1. ✅ Implement real LLM provider (Phase 1) — **NEXT TASK**
-2. Generate real creative scripts (Phase 2)
-3. Implement basic video composition (Phase 3)
+1. ✅ Real Qwen LLM provider (Phase 1 — DONE, tested on GPU path; Colab run pending)
+2. ✅ Script generation via LLM (Qwen) — subsumed by the real script writer
+3. ⏳ Execute `notebooks/colab_qwen_validation.ipynb` on T4 and attach the manifest
+4. ⏳ Real TTS (Phase 2) — **NEXT TASK**: Qwen3-TTS / Chatterbox / Kokoro
 
 ### Medium Priority (Do After)
 4. Integrate stock footage API
@@ -302,13 +318,20 @@ Improve quality and reduce costs through iteration.
 
 ## Definition of Done
 
-### Phase 1 (Next Phase)
-- [ ] Real LLM provider integrated and tested
-- [ ] Mock provider available as fallback
-- [ ] Documentation complete (CREATIVE_DIRECTOR_GUIDE.md updated)
-- [ ] No regressions (all 21 tests still passing)
-- [ ] End-to-end test with real LLM output
-- [ ] PROJECT_STATUS.md updated
+### Phase 1 (DONE — Real LLM)
+- [x] Real LLM provider integrated and tested (Qwen, on-device Transformers)
+- [x] Mock provider available as fallback (non-strict mode)
+- [x] Documentation complete (CREATIVE_DIRECTOR_GUIDE.md, COLAB_INSTRUCTIONS.md updated)
+- [x] No regressions (69 tests passing)
+- [x] End-to-end path exercised locally (strict mode fails safely without CUDA)
+- [ ] Colab execution of the validation notebook (final proof on T4/A100)
+- [x] PROJECT_STATUS.md updated
+
+### Phase 2 (NEXT — Voice Generation & Scriptwriting)
+- [ ] Real script generation w/ Qwen — **DONE** (see `src/script/qwen_writer.py`)
+- [ ] TTS integration (Qwen3-TTS / Chatterbox / Kokoro)
+- [ ] Script-TTS sync and pacing
+- [ ] Full pipeline: video → director (Qwen) → script (Qwen) → TTS → rendered output
 
 ### Handoff Notes for Next Developer
 

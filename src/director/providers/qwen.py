@@ -15,10 +15,10 @@ class QwenProvider(LLMProvider):
 
     def __init__(
         self,
-        model: str = "Qwen/Qwen3-30B-A3B",
+        model: str = "Qwen/Qwen3-7B-A0.5B",
         device: str = "auto",
         dtype: str = "auto",
-        thinking: bool = True,
+        thinking: bool = False,
         temperature: float = 0.8,
         top_p: float = 0.9,
         max_new_tokens: int = 2048,
@@ -28,7 +28,7 @@ class QwenProvider(LLMProvider):
         Initialize Qwen provider with lazy model loading.
 
         Args:
-            model: Model identifier from HuggingFace (e.g., "Qwen/Qwen3-30B-A3B")
+            model: Model identifier from HuggingFace (e.g., "Qwen/Qwen3-7B-A0.5B")
             device: "auto", "cuda", or "cpu"
             dtype: "auto", "float16", "float32"
             thinking: Enable extended thinking if supported
@@ -52,12 +52,25 @@ class QwenProvider(LLMProvider):
         self._device_resolved = None
         self._initialized = False
 
+        # Real execution timing (recorded for validation reports)
+        self.model_load_time_sec = None
+        self.last_generation_time_sec = None
+        self.generation_times = []
+
+    @property
+    def device_resolved(self) -> Optional[str]:
+        """Device actually used after initialization (None before load)."""
+        return self._device_resolved
+
     def _initialize(self) -> None:
         """Lazy initialization of model and tokenizer."""
         if self._initialized:
             return
 
         logger.info(f"Initializing Qwen provider with model: {self.model_name}")
+        import time as _time
+
+        _load_start = _time.monotonic()
 
         try:
             import torch
@@ -102,7 +115,10 @@ class QwenProvider(LLMProvider):
                     logger.warning(f"Could not get GPU info: {e}")
 
             self._initialized = True
-            logger.info("Qwen provider initialized successfully")
+            self.model_load_time_sec = round(_time.monotonic() - _load_start, 2)
+            logger.info(
+                f"Qwen provider initialized successfully in {self.model_load_time_sec}s"
+            )
 
         except ImportError as e:
             raise RuntimeError(
@@ -495,6 +511,21 @@ Provide refined concept as JSON:
             logger.error(f"Qwen production plan generation failed: {e}")
             raise
 
+    def generate_text(
+        self,
+        prompt: str,
+        max_new_tokens: Optional[int] = None,
+    ) -> str:
+        """Public convenience wrapper for raw text generation.
+
+        Used by the script stage and any caller that needs ad-hoc model output.
+        Ensures the model is initialized (loaded) before generation.
+        """
+        self._initialize()
+        if max_new_tokens is not None:
+            self.max_new_tokens = int(max_new_tokens)
+        return self._generate_text(prompt)
+
     def _generate_text(self, prompt: str) -> str:
         """
         Generate text using the model.
@@ -508,8 +539,18 @@ Provide refined concept as JSON:
         if not self.model or not self.tokenizer:
             raise RuntimeError("Model not initialized")
 
+        import time as _time
+        _gen_start = _time.monotonic()
+
         try:
             import torch
+
+            # Honor the thinking flag when supported by the model.
+            try:
+                if hasattr(self.model, "generation_config"):
+                    self.model.generation_config.enable_thinking = bool(self.thinking)
+            except Exception:
+                pass
 
             # Tokenize
             inputs = self.tokenizer(
@@ -540,6 +581,9 @@ Provide refined concept as JSON:
             # Remove the prompt from output
             if prompt in generated_text:
                 generated_text = generated_text[generated_text.index(prompt) + len(prompt) :]
+
+            self.last_generation_time_sec = round(_time.monotonic() - _gen_start, 2)
+            self.generation_times.append(self.last_generation_time_sec)
 
             return generated_text.strip()
 

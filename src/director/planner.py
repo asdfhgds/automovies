@@ -64,7 +64,7 @@ def plan_director(project_dir: Path, title: str = None, use_creative: bool = Non
 
 def _plan_director_creative(project_dir: Path, title: str = None) -> Path:
     """Use LLM-backed creative director."""
-    from creative_director import CreativeDirector
+    from director.creative_director import CreativeDirector
     
     project_dir = Path(project_dir)
     
