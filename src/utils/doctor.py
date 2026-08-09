@@ -135,6 +135,15 @@ def run_checks():
     out['active_profile'] = profile
     out['profile_note'] = profile_note
     out['providers'] = _get_provider_status()
+    out['qwen_configuration'] = {
+        'provider': os.environ.get('DIRECTOR_PROVIDER', 'mock' if profile == 'local' else 'qwen'),
+        'model': os.environ.get('DIRECTOR_MODEL', 'Qwen/Qwen3-30B-A3B'),
+        'device': os.environ.get('DIRECTOR_DEVICE', 'auto'),
+        'script_provider': os.environ.get('SCRIPT_PROVIDER', 'mock' if profile == 'local' else 'qwen'),
+        'script_model': os.environ.get('SCRIPT_MODEL', os.environ.get('DIRECTOR_MODEL', 'Qwen/Qwen3-30B-A3B')),
+        'require_real_llm': os.environ.get('REQUIRE_REAL_LLM', 'false').lower() == 'true',
+        'accelerate': _check_import('accelerate'),
+    }
     
     return out
 
@@ -190,6 +199,7 @@ def print_report(report=None):
     print('-'*60)
     profile = report.get('active_profile', 'local')
     print(f"Active profile: {profile}")
+    print(f"Qwen config: {report.get('qwen_configuration')}")
     if report.get('profile_note'):
         print(f"  Note: {report.get('profile_note')}")
     

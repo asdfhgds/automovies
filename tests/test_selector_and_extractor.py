@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from scene_selection.ranker import rank_scenes
-from scene_selection.selector import select_best_scene
+from scene_selection.selector import select_best_scene, select_scenes
 from editor.clip_extractor import extract_clip, probe_duration
 
 
@@ -68,3 +68,31 @@ def test_selection_and_extraction_tmp(tmp_path: Path):
     assert out_file.exists()
     dur = probe_duration(str(out_file))
     assert 0.9 <= dur <= 1.5
+
+
+def test_multi_scene_selection_preserves_legacy_artifact(tmp_path: Path):
+    proj = tmp_path / "proj"
+    scenes_dir = proj / "scenes"
+    scenes_dir.mkdir(parents=True)
+    scenes = [
+        {"scene_id": "scene-1", "start_sec": 0, "end_sec": 1, "scene_type": "dialogue"},
+        {"scene_id": "scene-2", "start_sec": 1, "end_sec": 2, "scene_type": "revelation"},
+        {"scene_id": "scene-3", "start_sec": 2, "end_sec": 3, "scene_type": "dialogue"},
+    ]
+    rankings = [
+        {"scene_id": "scene-1", "score": 0.9, "reason": "best"},
+        {"scene_id": "scene-2", "score": 0.8, "reason": "second"},
+        {"scene_id": "scene-3", "score": 0.7, "reason": "third"},
+    ]
+    (scenes_dir / "scene_index.json").write_text(json.dumps(scenes))
+    (scenes_dir / "scene_ranking.json").write_text(json.dumps(rankings))
+
+    path = select_scenes(
+        proj,
+        max_scenes=2,
+        scene_requirements=[{"purpose": "reveal", "preferred_scene_types": ["revelation"]}],
+    )
+    selected = json.loads(path.read_text())
+    assert [item["scene_id"] for item in selected] == ["scene-2", "scene-1"]
+    assert selected[0]["evidence_requirement"]["purpose"] == "reveal"
+    assert json.loads((scenes_dir / "selected_scene.json").read_text())["scene_id"] == "scene-2"

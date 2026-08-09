@@ -85,3 +85,34 @@ def test_pipeline_artifacts_produce_valid_render(tmp_path: Path):
     assert float(probe.stdout.strip()) > 0
     render_job = json.loads((project / "renders" / "render_job.json").read_text())
     assert render_job["status"] == "done"
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg is required for rendering tests",
+)
+def test_timeline_uses_all_selected_scene_clips(tmp_path: Path):
+    project = tmp_path / "project"
+    clips_dir = project / "assets" / "scenes"
+    clips_dir.mkdir(parents=True)
+    (project / "scenes").mkdir()
+    (project / "audio").mkdir()
+    _make_video(clips_dir / "scene-1.mp4", duration=0.5)
+    _make_video(clips_dir / "scene-2.mp4", duration=0.5)
+    # A valid WAV is required only so build_timeline can probe it.
+    subprocess.run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+        "-i", "anullsrc=r=44100:cl=mono", "-t", "0.2", str(project / "audio" / "voice.wav"),
+    ], check=True)
+    (project / "scenes" / "selected_scenes.json").write_text(json.dumps([
+        {"scene_id": "scene-1"}, {"scene_id": "scene-2"},
+    ]), encoding="utf-8")
+
+    timeline, _ = build_timeline(project)
+    video_track = timeline.get_track("video")
+    assert [item.content_path.name for item in video_track.items] == ["scene-1.mp4", "scene-2.mp4"]
+    assert video_track.items[1].start_sec >= video_track.items[0].end_sec
+    output = assemble(project)
+    assert output.exists()
+    render_job = json.loads((project / "renders" / "render_job.json").read_text())
+    assert len(render_job["timeline"]) == 2

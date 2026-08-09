@@ -449,3 +449,10 @@ To continue:
 7. Update this status document
 
 No blockers. Ready for GPU validation or next feature.
+
+## Pending GPU validation: Qwen director and script
+
+The local implementation includes a lazy `QwenProvider`, structured JSON
+repair, an evidence-grounded `QwenScriptProvider`, and Colab setup/run helpers.
+Local remains mock-only. No GPU Qwen run has been performed from this checkout,
+so real-model acceptance and performance figures remain pending.

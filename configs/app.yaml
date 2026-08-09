@@ -23,5 +23,5 @@ director:
   thinking: true
   temperature: 0.8
   top_p: 0.9
-  max_new_tokens: 2048
+  max_new_tokens: 4096
   timeout_sec: 180

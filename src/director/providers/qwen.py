@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Dict, Any, List, Optional
 
 from .base import LLMProvider
@@ -51,6 +52,7 @@ class QwenProvider(LLMProvider):
         self.tokenizer = None
         self._device_resolved = None
         self._initialized = False
+        self.load_time_sec = None
 
     def _initialize(self) -> None:
         """Lazy initialization of model and tokenizer."""
@@ -59,6 +61,7 @@ class QwenProvider(LLMProvider):
 
         logger.info(f"Initializing Qwen provider with model: {self.model_name}")
 
+        started = time.monotonic()
         try:
             import torch
             from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -102,6 +105,7 @@ class QwenProvider(LLMProvider):
                     logger.warning(f"Could not get GPU info: {e}")
 
             self._initialized = True
+            self.load_time_sec = round(time.monotonic() - started, 3)
             logger.info("Qwen provider initialized successfully")
 
         except ImportError as e:
@@ -546,3 +550,22 @@ Provide refined concept as JSON:
         except Exception as e:
             logger.error(f"Text generation failed: {e}")
             raise
+
+    def model_info(self) -> Dict[str, Any]:
+        """Return configuration and resolved runtime state without loading a model."""
+        return {"model": self.model_name, "device": self._device_resolved or self._resolve_device(),
+                "dtype": self.dtype, "thinking": self.thinking, "loaded": self._initialized,
+                "load_time_sec": self.load_time_sec}
+
+    def generate_json(self, prompt: str, required_keys: List[str]) -> Dict[str, Any]:
+        """Generate validated JSON, requesting one repair if the first response is malformed."""
+        self._initialize()
+        response = self._generate_text(prompt)
+        result = self._extract_json(response)
+        if not isinstance(result, dict) or any(not result.get(key) for key in required_keys):
+            repair = ("Return only a corrected JSON object. Required keys: "
+                      + ", ".join(required_keys) + "\nInvalid response:\n" + response)
+            result = self._extract_json(self._generate_text(repair))
+        if not isinstance(result, dict) or any(not result.get(key) for key in required_keys):
+            raise ValueError("Qwen returned invalid structured output")
+        return result

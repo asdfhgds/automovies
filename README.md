@@ -30,3 +30,11 @@ The completed project contains:
 The real WhisperX, PySceneDetect, Qwen, TTS, image, and video providers remain
 optional. When they are not installed, the pipeline falls back to local
 implementations so the full artifact flow can still be exercised.
+
+## Multi-scene evidence selection
+
+The pipeline now selects up to three distinct, ranked scenes for a production
+plan. It writes `scenes/selected_scenes.json` as the canonical artifact and
+also keeps `scenes/selected_scene.json` pointing to the first scene for older
+tools. The selected clips are extracted and placed sequentially on the local
+FFmpeg timeline.

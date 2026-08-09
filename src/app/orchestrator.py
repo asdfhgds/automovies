@@ -2,6 +2,7 @@
 from pathlib import Path
 import time
 import sys
+import os
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 SRC = ROOT / 'src'
@@ -14,6 +15,11 @@ if str(SRC) not in sys.path:
 def start_pipeline(project_id: str):
     project_dir = ROOT / 'data' / project_id
     print(f"Starting pipeline for project {project_id} -> {project_dir}")
+    require_real_llm = os.getenv("REQUIRE_REAL_LLM", "false").lower() == "true"
+    if require_real_llm and os.getenv("STUDIO_PROFILE") != "colab-gpu":
+        raise RuntimeError("REQUIRE_REAL_LLM=true requires STUDIO_PROFILE=colab-gpu")
+    if require_real_llm and (os.getenv("DIRECTOR_PROVIDER") != "qwen" or os.getenv("SCRIPT_PROVIDER") != "qwen"):
+        raise RuntimeError("Strict GPU validation requires DIRECTOR_PROVIDER=qwen and SCRIPT_PROVIDER=qwen")
 
     # Phase: Transcription (adapter)
     try:
@@ -43,7 +49,6 @@ def start_pipeline(project_id: str):
     plan_path = None
     try:
         import json
-        import os
         
         # Load scene index and transcript for director
         scenes_file = project_dir / 'scenes' / 'scene_index.json'
@@ -77,6 +82,8 @@ def start_pipeline(project_id: str):
         
         # Try creative director first (if enabled)
         use_creative = os.getenv('CREATIVE_DIRECTOR_ENABLED', 'false').lower() == 'true'
+        if require_real_llm:
+            use_creative = True
         
         if use_creative and scene_index and transcript:
             try:
@@ -90,6 +97,8 @@ def start_pipeline(project_id: str):
                 provider = get_llm_provider_from_config(director_config)
                 
                 if not provider:
+                    if require_real_llm:
+                        raise RuntimeError("Qwen provider could not be created in strict validation mode")
                     print("Failed to load LLM provider. Falling back to deterministic planner.")
                     use_creative = False
                 else:
@@ -118,6 +127,7 @@ def start_pipeline(project_id: str):
                         "concept": selected_concept,
                         "production_plan": production_plan,
                         "all_concepts": result.get("generated_concepts", []),
+                        "provider_metadata": provider.model_info() if hasattr(provider, "model_info") else {"provider": "qwen"},
                     }
                     
                     # Write director plan to file
@@ -128,11 +138,15 @@ def start_pipeline(project_id: str):
                     print(f"Creative director thesis: {director_plan['thesis'][:80]}...")
                 
             except Exception as e:
+                if require_real_llm:
+                    raise RuntimeError(f"Real Qwen director failed: {e}") from e
                 print(f"Creative director failed: {e}. Falling back to deterministic planner.")
                 use_creative = False
         
         # Fallback to deterministic planner
         if not use_creative:
+            if require_real_llm:
+                raise RuntimeError("Strict validation cannot use deterministic director")
             from director.planner import plan_director
             plan_path = plan_director(project_dir)
             print("Using deterministic director (fallback)")
@@ -169,9 +183,17 @@ def start_pipeline(project_id: str):
 
     # Phase: Scene selection
     try:
-        from scene_selection.selector import select_best_scene
-        sel_path = select_best_scene(project_dir)
-        print(f"Selected scene -> {sel_path}")
+        from scene_selection.selector import select_scenes
+        scene_requirements = []
+        if plan_path and plan_path.exists():
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            scene_requirements = plan.get("production_plan", {}).get(
+                "scene_requirements", plan.get("scene_requirements", [])
+            )
+            if not scene_requirements:
+                scene_requirements = plan.get("evidence_requirements", [])
+        sel_path = select_scenes(project_dir, max_scenes=3, scene_requirements=scene_requirements)
+        print(f"Selected scenes -> {sel_path}")
     except Exception as e:
         print(f"Scene selection failed: {e}")
         raise
@@ -181,7 +203,7 @@ def start_pipeline(project_id: str):
         from editor.clip_extractor import extract_clip
         # read selected scene and project_meta for source
         import json
-        sel = json.loads(sel_path.read_text(encoding='utf-8'))
+        selections = json.loads(sel_path.read_text(encoding='utf-8'))
         meta_path = project_dir / 'project_meta.json'
         meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
         source = meta.get('source_path')
@@ -189,9 +211,10 @@ def start_pipeline(project_id: str):
             raise RuntimeError('No source video registered for clip extraction')
         out_dir = project_dir / 'assets' / 'scenes'
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_file = out_dir / f"{sel.get('scene_id')}.mp4"
-        extract_clip(source, sel.get('start_sec'), sel.get('end_sec'), str(out_file))
-        print(f"Extracted scene clip -> {out_file}")
+        for selection in selections:
+            out_file = out_dir / f"{selection.get('scene_id')}.mp4"
+            extract_clip(source, selection.get('start_sec'), selection.get('end_sec'), str(out_file))
+            print(f"Extracted scene clip -> {out_file}")
     except Exception as e:
         print(f"Clip extraction failed: {e}")
         raise

@@ -1,4 +1,21 @@
-GPU Validation (Colab)
+# GPU Validation (Colab)
+
+## Real Qwen director and script run
+
+Use a GPU runtime. Run `bash scripts/colab_setup.sh`, then set
+`STUDIO_PROFILE=colab-gpu`, `DIRECTOR_PROVIDER=qwen`, and
+`SCRIPT_PROVIDER=qwen`. `scripts/colab_run.py` defaults to the practical
+`Qwen/Qwen3-7B-A0.5B`; override `DIRECTOR_MODEL` for larger GPUs.
+
+```bash
+python scripts/colab_run.py
+python src/main.py init --title "Legal test" --source tests/fixtures/test_speech.mp4
+python src/main.py run --project-id <project-id>
+pytest -m llm_integration -q
+```
+
+Save the `doctor` JSON plus model, device, load time, and generation timings.
+This milestone is not GPU-validated until the commands finish on a real GPU.
 
 1) Open a new Google Colab notebook. Set Runtime > Change runtime type > GPU.
 
