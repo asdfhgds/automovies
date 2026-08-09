@@ -25,6 +25,22 @@ def _load_scenes(project_dir: Path):
     return []
 
 
+def _load_selected_scenes(project_dir: Path):
+    """Load the scenes chosen for the cut (multi-scene first, then legacy single)."""
+    for path in (
+        project_dir / "scenes" / "selected_scenes.json",
+        project_dir / "scenes" / "selected_scene.json",
+    ):
+        if not path.exists():
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            data = [data]
+        if isinstance(data, list):
+            return data
+    return []
+
+
 def generate_script(project_dir: Path):
     project_dir = Path(project_dir)
     plan_p = project_dir / 'director_plan.json'
@@ -37,15 +53,23 @@ def generate_script(project_dir: Path):
     if not scenes:
         raise FileNotFoundError('scene_index.json or scene_cards.json missing')
 
-    first_scene = scenes[0]
+    by_id = {s.get("scene_id"): s for s in scenes if s.get("scene_id")}
+    selected = _load_selected_scenes(project_dir)
+    selected = [s for s in selected if s.get("scene_id") in by_id]
+    if not selected:
+        selected = [scenes[0]]
+
     thesis = plan.get("thesis") or "the meaning hidden inside a pivotal scene"
-    summary = first_scene.get("summary") or first_scene.get("transcript") or "a pivotal moment"
     structure = plan.get("structure") or [
         {"id": "intro", "goal": "Hook and thesis", "target_seconds": 20},
         {"id": "scene_discussion", "goal": "Explain the scene", "target_seconds": 60},
         {"id": "closing", "goal": "Wrap and CTA", "target_seconds": 10},
     ]
 
+    def _scene_text(scene):
+        return scene.get("summary") or scene.get("transcript") or "a pivotal moment"
+
+    scene_cursor = 0
     sections = []
     for section in structure:
         section_id = section.get("id", f"section_{len(sections) + 1}")
@@ -53,15 +77,21 @@ def generate_script(project_dir: Path):
         duration = max(1, int(section.get("target_seconds", 15)))
         if section_id in ("intro", "hook"):
             text = f"At first glance, this moment seems simple. But {thesis}"
+            scene_ids = [selected[0]["scene_id"]]
         elif section_id in ("closing", "conclusion"):
             text = f"That is why this scene matters: {thesis}."
+            scene_ids = [selected[-1]["scene_id"]]
         else:
+            scene = selected[scene_cursor % len(selected)]
+            scene_cursor += 1
+            summary = _scene_text(by_id[scene["scene_id"]])
             text = f"{goal}. In this scene, {summary}. This gives us a way to see how {thesis}"
+            scene_ids = [scene["scene_id"]]
         sections.append({
             "section_id": section_id,
             "text": text,
             "estimated_seconds": duration,
-            "scene_ids": [first_scene.get("scene_id", "scene-1")],
+            "scene_ids": scene_ids,
         })
 
     voiceover = " ".join(section["text"] for section in sections)
@@ -75,6 +105,7 @@ def generate_script(project_dir: Path):
         "sections": sections,
         "cta": "Subscribe for more",
         "style_notes": f"{plan.get('tone', 'analytical')} commentary with a concise, cinematic pace",
+        "scene_ids": [s["scene_id"] for s in selected],
     }
     out_path = out_dir / 'script.json'
     with out_path.open('w', encoding='utf-8') as f:

@@ -85,3 +85,77 @@ def test_pipeline_artifacts_produce_valid_render(tmp_path: Path):
     assert float(probe.stdout.strip()) > 0
     render_job = json.loads((project / "renders" / "render_job.json").read_text())
     assert render_job["status"] == "done"
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg is required for rendering tests",
+)
+def test_multi_clip_pipeline_artifacts_produce_valid_render(tmp_path: Path):
+    project = tmp_path / "project"
+    (project / "scenes").mkdir(parents=True)
+    (project / "assets" / "scenes").mkdir(parents=True)
+    (project / "audio").mkdir()
+
+    _make_video(project / "assets" / "scenes" / "scene-1.mp4", duration=1.0)
+    _make_video(project / "assets" / "scenes" / "scene-2.mp4", duration=1.0)
+    (project / "project_meta.json").write_text(
+        json.dumps({"project_id": "multi-render", "title": "Multi Render"}),
+        encoding="utf-8",
+    )
+    (project / "director_plan.json").write_text(
+        json.dumps({
+            "project_id": "multi-render",
+            "thesis": "contrast drives the argument",
+            "tone": "analytical",
+            "structure": [
+                {"id": "intro", "goal": "Hook", "target_seconds": 2},
+                {"id": "analysis", "goal": "Analyze", "target_seconds": 2},
+                {"id": "closing", "goal": "Close", "target_seconds": 2},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    (project / "scenes" / "scene_index.json").write_text(
+        json.dumps([
+            {"scene_id": "scene-1", "start_sec": 0, "end_sec": 1.0, "summary": "The setup", "transcript": "A difficult choice"},
+            {"scene_id": "scene-2", "start_sec": 1, "end_sec": 2.0, "summary": "The payoff", "transcript": "The consequences"},
+        ]),
+        encoding="utf-8",
+    )
+    (project / "scenes" / "selected_scenes.json").write_text(
+        json.dumps([
+            {"scene_id": "scene-1", "start_sec": 0, "end_sec": 1.0, "order": 0},
+            {"scene_id": "scene-2", "start_sec": 1, "end_sec": 2.0, "order": 1},
+        ]),
+        encoding="utf-8",
+    )
+
+    generate_script(project)
+    script = json.loads((project / "script.json").read_text(encoding="utf-8"))
+    assert script.get("scene_ids") == ["scene-1", "scene-2"]
+
+    synthesize_voice(project)
+    timeline, timeline_path = build_timeline(project)
+    assert timeline_path.exists()
+    video_track = timeline.get_track("video")
+    assert video_track is not None
+    assert len(video_track.items) == 2
+    assert video_track.items[0].content_path.name == "scene-1.mp4"
+    assert video_track.items[1].content_path.name == "scene-2.mp4"
+
+    output = assemble(project)
+    assert output.exists()
+    probe = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert float(probe.stdout.strip()) > 0
+    render_job = json.loads((project / "renders" / "render_job.json").read_text())
+    assert render_job["status"] == "done"
+    assert len(render_job["timeline"]) == 2

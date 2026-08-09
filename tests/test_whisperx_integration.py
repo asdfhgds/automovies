@@ -1,3 +1,4 @@
+import os
 import pytest
 import shutil
 from pathlib import Path
@@ -17,6 +18,11 @@ def has_ffmpeg():
     return shutil.which('ffmpeg') is not None
 
 
+@pytest.mark.slow
+@pytest.mark.skipif(
+    os.environ.get('STUDIO_RUN_REAL_TESTS') != '1',
+    reason='Real transcription test (downloads/loads a model). Enable with STUDIO_RUN_REAL_TESTS=1',
+)
 def test_whisperx_integration(tmp_path: Path):
     """Optional integration test for WhisperX.
 

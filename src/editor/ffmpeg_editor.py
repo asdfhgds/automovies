@@ -1,4 +1,9 @@
-"""Timeline-backed FFmpeg renderer for the local MVP profile."""
+"""Timeline-backed FFmpeg renderer for the local MVP profile.
+
+Supports a multi-scene cut: every selected scene clip is concatenated in
+selection order, scaled to the export resolution, and mixed with the generated
+voiceover. Subtitles from the script are recorded in the timeline (not burned).
+"""
 import json
 import shutil
 import subprocess
@@ -23,33 +28,55 @@ def _probe_duration(path: Path) -> float:
     return max(0.1, float(result.stdout.strip()))
 
 
-def _selected_clip(project_dir: Path) -> Optional[Path]:
-    selected_path = project_dir / "scenes" / "selected_scene.json"
-    if not selected_path.exists():
-        return None
-    selected = json.loads(selected_path.read_text(encoding="utf-8"))
-    scene_id = selected.get("scene_id")
-    if not scene_id:
-        return None
-    clip = project_dir / "assets" / "scenes" / f"{scene_id}.mp4"
-    return clip if clip.exists() else None
+def _selected_clips(project_dir: Path) -> list:
+    """Return [(scene_entry, clip_path), ...] for the selected cut.
+
+    Prefers selected_scenes.json (multi-scene) and falls back to the legacy
+    selected_scene.json single-scene file.
+    """
+    scenes_dir = project_dir / "scenes"
+    scenes = []
+    multi = scenes_dir / "selected_scenes.json"
+    single = scenes_dir / "selected_scene.json"
+    if multi.exists():
+        data = json.loads(multi.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            data = [data]
+        scenes = data if isinstance(data, list) else []
+    elif single.exists():
+        scenes = [json.loads(single.read_text(encoding="utf-8"))]
+
+    clips = []
+    for scene in scenes:
+        scene_id = scene.get("scene_id")
+        if not scene_id:
+            continue
+        clip = project_dir / "assets" / "scenes" / f"{scene_id}.mp4"
+        if clip.exists():
+            clips.append((scene, clip))
+    return clips
 
 
 def build_timeline(project_dir: Path):
-    """Build and persist a timeline from the selected scene and voiceover."""
+    """Build and persist a timeline from the selected clips and voiceover."""
     project_dir = Path(project_dir)
-    clip = _selected_clip(project_dir)
+    clips = _selected_clips(project_dir)
     voice = project_dir / "audio" / "voice.wav"
-    if clip is None:
-        raise FileNotFoundError("Selected scene clip not found")
+    if not clips:
+        raise FileNotFoundError("No selected scene clips found")
     if not voice.exists():
         raise FileNotFoundError("Voiceover audio not found")
 
-    clip_duration = _probe_duration(clip)
+    clip_durations = [_probe_duration(clip) for _, clip in clips]
     voice_duration = _probe_duration(voice)
-    total_duration = max(clip_duration, voice_duration)
+    video_total = sum(clip_durations)
+    total_duration = max(video_total, voice_duration)
+
     builder = TimelineBuilder(total_duration)
-    builder.add_video_clip(clip, 0.0, total_duration)
+    cursor = 0.0
+    for (_, clip), duration in zip(clips, clip_durations):
+        builder.add_video_clip(clip, cursor, duration)
+        cursor += duration
     builder.add_voiceover(voice, 0.0, voice_duration)
 
     script_path = project_dir / "script.json"
@@ -78,8 +105,7 @@ def build_timeline(project_dir: Path):
 def _render_job(project_dir: Path, timeline, output_path: Path) -> Dict[str, Any]:
     video_track = timeline.get_track(TrackType.VIDEO)
     voice_track = timeline.get_track(TrackType.VOICE)
-    clip = video_track.items[0].content_path
-    voice = voice_track.items[0].content_path
+    voice = voice_track.items[0].content_path if voice_track and voice_track.items else None
     return {
         "project_id": project_dir.name,
         "timeline": [
@@ -106,7 +132,7 @@ def _render_job(project_dir: Path, timeline, output_path: Path) -> Dict[str, Any
 
 
 def assemble(project_dir: Path):
-    """Render a valid MP4 from the selected clip and generated voiceover."""
+    """Render a valid MP4 from the selected clips and generated voiceover."""
     project_dir = Path(project_dir)
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         raise RuntimeError("ffmpeg and ffprobe are required for assembly")
@@ -121,18 +147,35 @@ def assemble(project_dir: Path):
     out_file = renders_dir / "final_render.mp4"
     video_track = timeline.get_track(TrackType.VIDEO)
     voice_track = timeline.get_track(TrackType.VOICE)
-    clip = video_track.items[0].content_path
+    if not video_track or not video_track.items:
+        raise ValueError("Timeline has no video clips")
+    if not voice_track or not voice_track.items:
+        raise ValueError("Timeline has no voiceover")
+    clips = [item.content_path for item in video_track.items]
     voice = voice_track.items[0].content_path
     duration = timeline.total_duration_sec
 
+    inputs = []
+    for clip in clips:
+        inputs += ["-i", str(clip)]
+    inputs += ["-i", str(voice)]
+    voice_index = len(clips)
+
+    chains = []
+    for i in range(len(clips)):
+        chains.append(
+            f"[{i}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+            f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
+        )
+    concat_in = "".join(f"[v{i}]" for i in range(len(clips)))
+    chains.append(f"{concat_in}concat=n={len(clips)}:v=1:a=0[v]")
+    filter_complex = ";".join(chains)
+
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-stream_loop", "-1", "-i", str(clip),
-        "-i", str(voice),
-        "-filter_complex",
-        "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,"
-        "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v]",
-        "-map", "[v]", "-map", "1:a:0",
+        *inputs,
+        "-filter_complex", filter_complex,
+        "-map", "[v]", "-map", f"{voice_index}:a:0",
         "-t", f"{duration:.3f}",
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-ar", "44100",

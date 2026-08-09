@@ -1,6 +1,6 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: After Architecture Implementation Session
+**Last Updated**: After Multi-Scene Selection Session
 
 ## Executive Summary
 
@@ -31,7 +31,7 @@ Creative Director (Qwen LLM or deterministic)
   ↓
 Thesis-based Scene Ranking (deterministic)
   ↓
-Scene Selection (highest-scoring valid scene)
+Scene Selection (multi-scene, non-overlapping top-K)
   ↓
 FFmpeg Clip Extraction (real)
   ↓
@@ -147,9 +147,10 @@ configs/
   - Unit tests passing
 
 - **Scene Selection** (src/scene_selection/selector.py)
-  - Highest-scoring valid scene selection
-  - Timestamp validation
-  - Duration checking
+  - Multi-scene selection (`select_scenes` → `selected_scenes.json`)
+  - Non-overlapping, minimum-duration, timestamp-validated picks
+  - Backward-compatible single scene (`selected_scene.json`)
+  - Writes selection order for the editing stage
 
 - **FFmpeg Clip Extraction** (src/editor/clip_extractor.py)
   - Real video clip extraction
@@ -299,7 +300,7 @@ providers:
 ## Known Limitations
 
 1. **No quantization support** (int8/int4) - limits which GPUs work with which models
-2. **Single scene selection** - architecture prepared for multiple scenes, not yet implemented
+2. **Keyword-based ranking** - scene ranking is deterministic lexical scoring; typed evidence (visual/emotional/dialogue) from the director is not yet used in selection
 3. **Deterministic director** - only fallback when Qwen unavailable
 4. **Mock generation providers** - real TTS/image/video integration deferred
 5. **No human feedback loop** - one-shot generation only
@@ -308,14 +309,12 @@ providers:
 ## Test Commands
 
 ```bash
-# Local development (all tests, ~30 seconds)
+# Local development (all fast tests, ~15 seconds)
 pytest
 
-# Skip slow tests
-pytest -m "not slow"
-
-# Only fast unit tests
-pytest -m "not llm_integration"
+# Real-model tests (WhisperX/Qwen/E2E) are skipped by default.
+# Opt in explicitly:
+STUDIO_RUN_REAL_TESTS=1 pytest -m "slow or integration"
 
 # GPU integration tests (requires GPU + models)
 pytest -m llm_integration
@@ -340,10 +339,15 @@ python src/main.py run --project-id <id>
 - ✅ Persist `timeline/timeline.json` and `renders/render_job.json`
 - ✅ Produce a valid H.264/AAC MP4 in the local profile
 
-### 2. Evidence-Driven Scene Selection
-- Extend director to produce evidence requirements
-- Implement multi-scene selection based on evidence types
-- Update selected_scene.json → selected_scenes.json
+### 2. Multi-Scene Selection (Evidence-Driven Cut)
+- ✅ Multi-scene selector (`select_scenes` → `selected_scenes.json`)
+- ✅ Non-overlapping, timestamp-validated, minimum-duration scene picks
+- ✅ Backward-compatible `selected_scene.json` (no clobbering)
+- ✅ Multi-clip FFmpeg extraction (one clip per selected scene)
+- ✅ Multi-clip timeline + concatenated render (scene clips + voiceover + subtitles)
+- ✅ Script narration references all selected scenes in order
+- ✅ QC validates the multi-scene cut
+- ⏳ Typed evidence (visual/emotional/dialogue) from the director to drive selection
 
 ### 3. Script Generation Integration
 - ✅ Integrate deterministic script generation into orchestrator
@@ -388,35 +392,36 @@ python src/main.py run --project-id <id>
 grep -A 20 "profiles:" configs/profiles.yaml
 ```
 
-## Files Changed This Session
+## Files Changed This Session (Multi-Scene Selection)
 
 - **Created**:
-  - `src/generation/base.py` - Provider interfaces
-  - `src/generation/mock.py` - Mock implementations
-  - `src/generation/provider_factory.py` - Provider factory
-  - `src/editing/timeline.py` - Timeline data structures
-  - `src/quality/validator.py` - QC validator
-  - `configs/profiles.yaml` - Multi-profile configuration
-  - `src/generation/__init__.py`
-  - `src/editing/__init__.py`
-  - `src/quality/__init__.py`
+  - `tests/test_multi_scene_selection.py` - Multi-scene selector unit tests
 
 - **Modified**:
-  - `src/utils/doctor.py` - Enhanced with profile detection and provider info
-  - `src/app/orchestrator.py` - Added PYTHONPATH fixing
-  - `pyproject.toml` - Added pytest configuration and test markers
+  - `src/scene_selection/selector.py` - Added `select_scenes` (multi-scene), made `select_best_scene` non-destructive
+  - `src/editor/ffmpeg_editor.py` - Multi-clip timeline + concatenated FFmpeg render
+  - `src/script/writer.py` - Narration references all selected scenes
+  - `src/app/orchestrator.py` - Multi-scene selection + per-scene clip extraction
+  - `src/qc/critic.py` - QC checks for selected_scenes.json and scene clips
+  - `tests/test_timeline_rendering.py` - Added multi-clip render test
+  - `tests/test_whisperx_integration.py` - Gated behind `STUDIO_RUN_REAL_TESTS`
+  - `tests/integration/test_e2e_integration.py` - Gated behind `STUDIO_RUN_REAL_TESTS`
+  - `tests/test_transcription_adapter.py` - Forces stub path (no model load)
+  - `pyproject.toml` - Default `pytest` excludes `slow`/`llm_integration`
 
 ## Test Results
 
 ```
-26 Qwen provider tests ...................... PASS
-10 Creative director tests .................. PASS
-4 Scene ranking tests ....................... PASS
-Timeline validation tests ................... (manual)
-QC validator tests .......................... (manual)
-Mock provider tests ......................... (implicit)
-─────────────────────────────────────────────────────
-TOTAL: 40+ tests passing, 0 failures
+52 fast tests ............................. PASS
+  - 26 Qwen provider tests
+  - 10 Creative director tests
+  - 5 Multi-scene selection tests
+  - Multi-clip rendering test (FFmpeg)
+  - Existing ranking / selection / extraction / timeline tests
+2 skipped (env-gated real-model tests)
+8 deselected (slow / llm_integration)
+─────────────────────────────────────────
+TOTAL: 52 passing, 0 failures, ~16s runtime
 ```
 
 ## Status for Handoff
@@ -424,10 +429,12 @@ TOTAL: 40+ tests passing, 0 failures
 ✅ **Architecture**: Complete and validated
 ✅ **Local Development**: Ready on weak laptops
 ✅ **Testing**: Comprehensive, fast
+✅ **Multi-Scene Cut**: Selection, extraction, timeline, render, and QC wired end-to-end
+⏳ **Typed Evidence Selection**: Director-driven evidence typing not yet used
 ✅ **Documentation**: Profiles, provider system, configuration
 ⏳ **GPU Validation**: Ready (needs Colab execution)
 ✅ **Timeline Rendering**: Local FFmpeg rendering integrated and validated
-⏳ **Multi-Scene Selection**: Architecture prepared
+✅ **Multi-Scene Selection**: Implemented and wired through extraction, render, and QC
 ⏳ **Real TTS/Image/Video**: Mocks complete, integration pending
 
 ## Continuation Instructions

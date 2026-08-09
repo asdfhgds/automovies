@@ -1,10 +1,17 @@
 import json
+import os
 import shutil
 from pathlib import Path
 import pytest
 import time
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        os.environ.get('STUDIO_RUN_REAL_TESTS') != '1',
+        reason='Runs the real transcription/scene-detection pipeline. Enable with STUDIO_RUN_REAL_TESTS=1',
+    ),
+]
 
 
 def has_whisperx():

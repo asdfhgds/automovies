@@ -167,21 +167,35 @@ def start_pipeline(project_id: str):
     except Exception as e:
         print(f"Scene ranking failed: {e}")
 
-    # Phase: Scene selection
+    # Phase: Scene selection (multi-scene, evidence-driven)
     try:
-        from scene_selection.selector import select_best_scene
-        sel_path = select_best_scene(project_dir)
-        print(f"Selected scene -> {sel_path}")
+        import json
+        from scene_selection.selector import select_scenes
+        # Director plan may request a specific number of scenes to extract.
+        top_n = 3
+        if plan_path and plan_path.exists():
+            try:
+                p = json.loads(plan_path.read_text(encoding='utf-8'))
+                requested = p.get('scenes_to_extract')
+                if isinstance(requested, list) and requested:
+                    top_n = len(requested)
+                elif isinstance(requested, int) and requested > 0:
+                    top_n = requested
+            except Exception:
+                top_n = 3
+        entries = select_scenes(project_dir, top_n=top_n)
+        sel_path = project_dir / 'scenes' / 'selected_scenes.json'
+        print(f"Selected {len(entries)} scene(s) -> {sel_path}")
     except Exception as e:
         print(f"Scene selection failed: {e}")
         raise
 
-    # Phase: Clip extraction
+    # Phase: Clip extraction (one per selected scene)
     try:
         from editor.clip_extractor import extract_clip
-        # read selected scene and project_meta for source
+        # read selected scenes and project_meta for source
         import json
-        sel = json.loads(sel_path.read_text(encoding='utf-8'))
+        selections = json.loads(sel_path.read_text(encoding='utf-8'))
         meta_path = project_dir / 'project_meta.json'
         meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
         source = meta.get('source_path')
@@ -189,9 +203,14 @@ def start_pipeline(project_id: str):
             raise RuntimeError('No source video registered for clip extraction')
         out_dir = project_dir / 'assets' / 'scenes'
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_file = out_dir / f"{sel.get('scene_id')}.mp4"
-        extract_clip(source, sel.get('start_sec'), sel.get('end_sec'), str(out_file))
-        print(f"Extracted scene clip -> {out_file}")
+        extracted = []
+        for sel in selections:
+            out_file = out_dir / f"{sel.get('scene_id')}.mp4"
+            extract_clip(source, sel.get('start_sec'), sel.get('end_sec'), str(out_file))
+            extracted.append(str(out_file))
+            print(f"Extracted scene clip -> {out_file}")
+        if not extracted:
+            raise RuntimeError('No scene clips were extracted')
     except Exception as e:
         print(f"Clip extraction failed: {e}")
         raise
