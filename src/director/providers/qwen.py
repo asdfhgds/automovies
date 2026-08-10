@@ -36,6 +36,61 @@ def _gpu_memory_gb() -> Optional[float]:
     return None
 
 
+def _first_json_value(text: str, start: int = 0) -> Optional[str]:
+    """Return the first balanced JSON object/array substring in ``text``.
+
+    String-aware (handles quotes/escapes) so braces inside strings don't count.
+    Returns None if no balanced value is found.
+    """
+    for idx in range(start, len(text)):
+        if text[idx] not in "[{":
+            continue
+        depth = 0
+        in_str = False
+        esc = False
+        for i in range(idx, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch in "[{":
+                    depth += 1
+                elif ch in "]}":
+                    depth -= 1
+                    if depth == 0:
+                        return text[idx : i + 1]
+    return None
+
+
+def _repair_json(text: str) -> Optional[str]:
+    """Fix the common JSON mistakes small LLMs make; validate before returning."""
+    if not text:
+        return None
+    text = text.strip()
+    text = re.sub(r"\bTrue\b", "true", text)
+    text = re.sub(r"\bFalse\b", "false", text)
+    text = re.sub(r"\bNone\b", "null", text)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    text = re.sub(r"//[^\n]*", "", text)
+    text = re.sub(
+        r"(?<![\w])'([^'\\]*(?:\\.[^'\\]*)*)'(?![\w])",
+        lambda m: '"' + m.group(1).replace('"', '\\"') + '"',
+        text,
+    )
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        return None
+
+
 class QwenProvider(LLMProvider):
     """Real LLM provider using Qwen models."""
 
@@ -77,6 +132,9 @@ class QwenProvider(LLMProvider):
         self.tokenizer = None
         self._device_resolved = None
         self._initialized = False
+
+        # Last raw generation output (for debugging failed JSON parsing)
+        self.last_raw_output: Optional[str] = None
 
         # Real execution timing (recorded for validation reports)
         self.model_load_time_sec = None
@@ -261,43 +319,41 @@ class QwenProvider(LLMProvider):
         Returns:
             Parsed JSON dict or None
         """
-        text = text.strip()
+        text = (text or "").strip()
+        if not text:
+            return None
+
+        candidates = []
 
         # Try 1: Direct JSON parsing
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
+        candidates.append(text)
 
         # Try 2: Fenced JSON (```json ... ```)
-        json_match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(1).strip())
-            except json.JSONDecodeError:
-                pass
+        fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+        if fenced:
+            candidates.append(fenced.group(1).strip())
 
-        # Try 3: Look for JSON object within text
-        # Find first { and last }
-        start = text.find("{")
-        if start != -1:
-            # Find matching closing brace
-            brace_count = 0
-            end = -1
-            for i in range(start, len(text)):
-                if text[i] == "{":
-                    brace_count += 1
-                elif text[i] == "}":
-                    brace_count -= 1
-                    if brace_count == 0:
-                        end = i + 1
-                        break
+        # Try 3: First balanced JSON value inside prose ("Sure! Here it is: {...}")
+        first_val = _first_json_value(text)
+        if first_val and first_val != text:
+            candidates.append(first_val)
 
-            if end != -1:
+        # Try 4: Targeted lookup of a specific key's value
+        if expected_key:
+            key_match = re.search(r'"' + re.escape(expected_key) + r'"\s*:', text)
+            if key_match:
+                val = _first_json_value(text, key_match.end())
+                if val:
+                    candidates.append(val)
+
+        for candidate in candidates:
+            for variant in (candidate, _repair_json(candidate)):
+                if not variant:
+                    continue
                 try:
-                    return json.loads(text[start:end])
+                    return json.loads(variant)
                 except json.JSONDecodeError:
-                    pass
+                    continue
 
         logger.warning(f"Failed to extract JSON from response: {text[:100]}")
         return None
@@ -517,31 +573,36 @@ Plan now:"""
         """Generate creative concepts using Qwen."""
         self._initialize()
 
-        try:
-            prompt = self._build_generation_prompt(
-                movie_metadata,
-                scene_index,
-                transcript,
-                creative_memory,
-                user_topic,
-                num_concepts,
-            )
+        prompt = self._build_generation_prompt(
+            movie_metadata,
+            scene_index,
+            transcript,
+            creative_memory,
+            user_topic,
+            num_concepts,
+        )
 
-            logger.info(f"Generating {num_concepts} concepts with Qwen...")
-            output = self._generate_text(prompt)
+        logger.info(f"Generating {num_concepts} concepts with Qwen...")
+        last_error: Optional[str] = None
+        # One retry with a different sampling seed often fixes flaky JSON.
+        for attempt in range(2):
+            output = self._generate_text(prompt, seed_override=attempt)
+            self.last_raw_output = output
 
-            # Extract and parse JSON
             result = self._extract_json(output, "concepts")
             if not result:
-                raise ValueError(
-                    f"Failed to extract JSON from generation output: {output[:300]}"
-                )
+                last_error = f"Failed to extract JSON from generation output: {output[:400]}"
+                logger.warning(f"Concept parse failed (attempt {attempt + 1}): {last_error}")
+                continue
 
             concepts = self._coerce_concepts(result)
             if not concepts:
-                raise ValueError(
-                    f"Generation returned empty concepts list. Raw output: {output[:300]}"
+                last_error = (
+                    f"Generation returned empty concepts list. "
+                    f"Raw output: {output[:400]}"
                 )
+                logger.warning(f"Concept coercion empty (attempt {attempt + 1}): {last_error}")
+                continue
 
             # Validate
             if not self._validate_concepts(concepts):
@@ -550,9 +611,7 @@ Plan now:"""
             logger.info(f"Generated {len(concepts)} concepts")
             return concepts[:num_concepts]
 
-        except Exception as e:
-            logger.error(f"Qwen concept generation failed: {e}")
-            raise
+        raise ValueError(last_error or "Qwen concept generation failed")
 
     @staticmethod
     def _coerce_concepts(result: Any) -> List[Dict[str, Any]]:
@@ -661,12 +720,14 @@ Provide refined concept as JSON:
             self.max_new_tokens = int(max_new_tokens)
         return self._generate_text(prompt)
 
-    def _generate_text(self, prompt: str) -> str:
+    def _generate_text(self, prompt: str, seed_override: int = None) -> str:
         """
         Generate text using the model.
 
         Args:
             prompt: Input prompt
+            seed_override: Optional int to add to the generation seed so a
+                retry draws a different sample without reloading the model
 
         Returns:
             Generated text (only the newly generated tokens, decoded)
@@ -727,6 +788,7 @@ Provide refined concept as JSON:
                     temperature=self.temperature,
                     top_p=self.top_p,
                     do_sample=True,
+                    seed=seed_override,
                 )
 
             # Decode ONLY the new tokens (drop prompt + chat wrappers).
