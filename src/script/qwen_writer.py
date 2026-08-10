@@ -115,9 +115,22 @@ def _build_prompt(
 Return ONLY valid JSON (no markdown, no code fences) with this exact structure:
 {{
   "sections": [
-    {{"section_id": "intro", "text": "Narration...", "estimated_seconds": 15, "scene_ids": ["scene-1"]}}
+    {{
+      "section_id": "YOUR_SECTION_ID_HERE",
+      "text": "YOUR_NARRATION_TEXT_HERE",
+      "estimated_seconds": 15,
+      "scene_ids": ["A_SCENE_ID_FROM_THE_LIST_ABOVE"]
+    }}
   ]
-}}"""
+}}
+
+IMPORTANT - REPLACE, DON'T COPY:
+- The ALL-CAPS strings above are placeholders, NOT text to output.
+- Write the actual narration for each required section, opening with the thesis
+  and referencing the selected scenes above as evidence.
+- section_id must be one of the required section ids; scene_ids only from the list above.
+- Never output placeholder strings like "YOUR_NARRATION_TEXT_HERE".
+"""
 
 
 def _normalize_sections(raw: Any, structure: List[Dict[str, Any]], selected_scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -225,6 +238,21 @@ def generate_script_qwen(
         )
 
     sections = _normalize_sections(parsed.get("sections"), structure, selected)
+
+    # Reject narration that just copied the prompt's example placeholders.
+    from utils.json_guard import contains_placeholder, is_exact_placeholder
+
+    echoed = [
+        s for s in sections
+        if is_exact_placeholder(s["text"]) or contains_placeholder(s["text"])
+    ]
+    if echoed:
+        raise RuntimeError(
+            "Qwen echoed placeholder narration in sections: "
+            + ", ".join(str(s.get("section_id")) for s in echoed)
+            + f". Raw output: {output[:300]}"
+        )
+
     voiceover = " ".join(s["text"] for s in sections)
 
     meta_path = project_dir / "project_meta.json"

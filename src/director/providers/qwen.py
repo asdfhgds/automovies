@@ -6,6 +6,7 @@ import re
 from typing import Dict, Any, List, Optional
 
 from .base import LLMProvider
+from utils.json_guard import contains_placeholder
 
 logger = logging.getLogger(__name__)
 
@@ -448,21 +449,28 @@ Instead, generate specific interpretations with evidence.
 
 {f"User Focus: {user_topic}" if user_topic else ""}
 
-Return ONLY valid JSON (no markdown, no fencing) with this structure:
+Return ONLY valid JSON (no markdown, no code fences) with this structure:
+
 {{
   "concepts": [
     {{
-      "title": "Specific concept title",
-      "hook": "Engaging question or statement that draws viewers in",
-      "thesis": "The core argument about the film (specific, evidence-based)",
-      "why_interesting": "Why this interpretation reveals something important",
-      "supporting_scene_types": ["type1", "type2"],
-      "tone": "analytical_philosophical|psychological_intimate|metanarrative_interrogative|other",
-      "visual_strategy": "How to visualize this concept in editing, effects, etc.",
+      "title": "YOUR_ORIGINAL_TITLE_HERE",
+      "hook": "YOUR_ORIGINAL_OPENING_HOOK_HERE",
+      "thesis": "YOUR_SPECIFIC_EVIDENCE_BASED_THESIS_HERE",
+      "why_interesting": "WHY_THIS_ANGLE_MATTERS_HERE",
+      "supporting_scene_types": ["A_SCENE_TYPE_FROM_THE_MATERIAL_ABOVE"],
+      "tone": "A_SINGLE_TONE_FROM: analytical_philosophical|psychological_intimate|metanarrative_interrogative|other",
+      "visual_strategy": "YOUR_VISUAL_APPROACH_HERE",
       "estimated_duration_sec": 85
     }}
   ]
 }}
+
+IMPORTANT - REPLACE, DON'T COPY:
+- Every ALL-CAPS string above is a placeholder, NOT text to output.
+- Write original, specific content based ONLY on THIS film's transcript and scenes above.
+- Your title, hook, and thesis must reference concrete details from the material above.
+- Never output placeholder strings like "YOUR_ORIGINAL_TITLE_HERE".
 
 Generate now:"""
 
@@ -541,21 +549,24 @@ Create a detailed production plan with:
 4. Music strategy (mood, instrumentation)
 5. Editing strategy (pacing, cuts, transitions)
 
-Return ONLY valid JSON (no markdown, no fencing):
+Return ONLY valid JSON (no markdown, no code fences) with this structure:
+
 {{
   "structure": [
-    {{"section": "hook", "duration_sec": 10}},
-    {{"section": "setup", "duration_sec": 20}},
-    {{"section": "analysis", "duration_sec": 50}},
-    {{"section": "conclusion", "duration_sec": 10}}
+    {{"section": "YOUR_SECTION_NAME_HERE", "duration_sec": 15}}
   ],
   "scene_requirements": [
-    {{"purpose": "demonstrate_thesis", "preferred_scene_types": ["type1", "type2"]}}
+    {{"purpose": "YOUR_PURPOSE_HERE", "preferred_scene_types": ["YOUR_SCENE_TYPE_HERE"]}}
   ],
-  "visual_strategy": "Description of visual approach",
-  "music_strategy": "Description of music approach",
-  "editing_strategy": "Description of editing approach"
+  "visual_strategy": "YOUR_VISUAL_STRATEGY_HERE",
+  "music_strategy": "YOUR_MUSIC_STRATEGY_HERE",
+  "editing_strategy": "YOUR_EDITING_STRATEGY_HERE"
 }}
+
+IMPORTANT - REPLACE, DON'T COPY:
+- The ALL-CAPS strings above are placeholders, NOT text to output.
+- Give real section names and strategies grounded in the concept above.
+- Never output placeholder strings like "YOUR_SECTION_NAME_HERE".
 
 Plan now:"""
 
@@ -604,6 +615,16 @@ Plan now:"""
                 logger.warning(f"Concept coercion empty (attempt {attempt + 1}): {last_error}")
                 continue
 
+            # Small models sometimes echo the prompt's example JSON instead of
+            # writing original concepts; treat that as a failed generation.
+            if self._has_placeholder_concepts(concepts):
+                last_error = (
+                    "Generation echoed prompt placeholder text. "
+                    f"Raw output: {output[:400]}"
+                )
+                logger.warning(f"Concept placeholders (attempt {attempt + 1}): {last_error}")
+                continue
+
             # Validate
             if not self._validate_concepts(concepts):
                 logger.warning("Concepts failed validation, but proceeding")
@@ -612,6 +633,15 @@ Plan now:"""
             return concepts[:num_concepts]
 
         raise ValueError(last_error or "Qwen concept generation failed")
+
+    @staticmethod
+    def _has_placeholder_concepts(concepts: List[Dict[str, Any]]) -> bool:
+        """True if any concept looks like it copied the prompt's example text."""
+        for concept in concepts:
+            for field in ("title", "hook", "thesis", "why_interesting", "visual_strategy"):
+                if contains_placeholder(concept.get(field)):
+                    return True
+        return False
 
     @staticmethod
     def _coerce_concepts(result: Any) -> List[Dict[str, Any]]:
@@ -687,23 +717,44 @@ Provide refined concept as JSON:
         """Generate production plan for concept."""
         self._initialize()
 
-        try:
-            prompt = self._build_production_plan_prompt(concept, scene_index)
+        prompt = self._build_production_plan_prompt(concept, scene_index)
 
-            logger.info("Generating production plan with Qwen...")
-            output = self._generate_text(prompt)
+        logger.info("Generating production plan with Qwen...")
+        last_error: Optional[str] = None
+        for attempt in range(2):
+            output = self._generate_text(prompt, seed_override=attempt)
+            self.last_raw_output = output
 
-            # Extract and parse JSON
             plan = self._extract_json(output)
             if not plan:
-                raise ValueError("Failed to extract JSON from production plan")
+                last_error = f"Failed to extract JSON from production plan: {output[:400]}"
+                logger.warning(f"Plan parse failed (attempt {attempt + 1}): {last_error}")
+                continue
+
+            # Reject a plan that just copied the prompt's example placeholders.
+            text_fields = [
+                plan.get("visual_strategy"),
+                plan.get("music_strategy"),
+                plan.get("editing_strategy"),
+            ]
+            for req in plan.get("scene_requirements") or []:
+                if isinstance(req, dict):
+                    text_fields.append(req.get("purpose"))
+                    types = req.get("preferred_scene_types")
+                    if isinstance(types, list):
+                        text_fields.extend(types)
+            if any(contains_placeholder(f) for f in text_fields):
+                last_error = (
+                    "Production plan echoed prompt placeholder text. "
+                    f"Raw output: {output[:400]}"
+                )
+                logger.warning(f"Plan placeholders (attempt {attempt + 1}): {last_error}")
+                continue
 
             logger.info("Production plan generated")
             return plan
 
-        except Exception as e:
-            logger.error(f"Qwen production plan generation failed: {e}")
-            raise
+        raise ValueError(last_error or "Qwen production plan generation failed")
 
     def generate_text(
         self,

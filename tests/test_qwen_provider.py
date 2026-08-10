@@ -359,3 +359,60 @@ class TestConceptCoercion:
         assert QwenProvider._coerce_concepts({}) == []
         assert QwenProvider._coerce_concepts({"concepts": []}) == []
         assert QwenProvider._coerce_concepts("not a dict") == []
+
+class TestPlaceholderGuard:
+    """Placeholder-echo detection (a 4B model copying the prompt example)."""
+
+    def test_detects_old_example_text(self):
+        from src.director.providers.qwen import QwenProvider
+
+        concepts = [{
+            "title": "Specific concept title",
+            "hook": "Engaging question or statement that draws viewers in",
+            "thesis": "The core argument about the film (specific, evidence-based)",
+            "why_interesting": "ok",
+        }]
+        assert QwenProvider._has_placeholder_concepts(concepts)
+
+    def test_detects_all_caps_markers(self):
+        from src.director.providers.qwen import QwenProvider
+
+        concepts = [{"title": "YOUR_ORIGINAL_TITLE_HERE", "thesis": "real thesis"}]
+        assert QwenProvider._has_placeholder_concepts(concepts)
+
+    def test_accepts_original_concepts(self):
+        from src.director.providers.qwen import QwenProvider
+
+        concepts = [{
+            "title": "The Hidden Second Film",
+            "hook": "What if every cut hides a second story?",
+            "thesis": "The edit pattern quietly retells the plot in reverse.",
+            "why_interesting": "It flips how we read repetition.",
+        }]
+        assert not QwenProvider._has_placeholder_concepts(concepts)
+
+    def test_concept_prompt_has_no_old_placeholders(self):
+        from src.director.providers.qwen import QwenProvider
+
+        provider = QwenProvider(model="Qwen/Qwen3-4B-Instruct-2507", device="cpu")
+        prompt = provider._build_generation_prompt(
+            movie_metadata={"title": "T", "duration_sec": 90},
+            scene_index=[],
+            transcript={},
+            creative_memory="",
+        )
+        assert "Specific concept title" not in prompt
+        assert "type1" not in prompt
+        assert "YOUR_ORIGINAL_TITLE_HERE" in prompt
+
+    def test_production_plan_prompt_has_no_old_placeholders(self):
+        from src.director.providers.qwen import QwenProvider
+
+        provider = QwenProvider(model="Qwen/Qwen3-4B-Instruct-2507", device="cpu")
+        prompt = provider._build_production_plan_prompt(
+            concept={"title": "T", "thesis": "t", "tone": "analytical"},
+            scene_index=[],
+        )
+        assert "type1" not in prompt
+        assert "Description of visual approach" not in prompt
+        assert "YOUR_SECTION_NAME_HERE" in prompt

@@ -33,6 +33,9 @@ python -m pip install -q bitsandbytes || echo "   bitsandbytes install failed (4
 echo "== [5/6] Whisper + PySceneDetect (understanding) =="
 python -m pip install -q openai-whisper scenedetect opencv-python-headless || echo "   (optional understanding deps failed)"
 
+echo "== [5b/6] edge-tts (spoken validation clip so whisper has real content) =="
+python -m pip install -q edge-tts || echo "   edge-tts unavailable; will use a silent testsrc clip"
+
 echo "== [6/6] Verify =="
 python - <<'PY'
 import shutil, sys, torch
