@@ -416,3 +416,36 @@ class TestPlaceholderGuard:
         assert "type1" not in prompt
         assert "Description of visual approach" not in prompt
         assert "YOUR_SECTION_NAME_HERE" in prompt
+
+class TestTextConceptFallback:
+    """Plain-text fallback parser for weak JSON followers."""
+
+    def test_parses_labeled_concept(self):
+        from src.director.providers.qwen import QwenProvider
+
+        text = "Concept 1\nTitle: The Hidden Cut\nHook: What hides in the edit?\nThesis: The cut pattern retells the plot backwards.\nWhy interesting: It changes how we watch."
+        concepts = QwenProvider._parse_text_concepts(text)
+        assert len(concepts) == 1
+        assert concepts[0]["title"] == "The Hidden Cut"
+        assert concepts[0]["thesis"] == "The cut pattern retells the plot backwards."
+
+    def test_parses_two_concepts(self):
+        from src.director.providers.qwen import QwenProvider
+
+        text = ("Concept 1\nTitle: A\nThesis: t1\n"
+                "Concept 2\nTitle: B\nThesis: t2")
+        concepts = QwenProvider._parse_text_concepts(text)
+        assert len(concepts) == 2
+
+    def test_ignores_unlabeled_garbage(self):
+        from src.director.providers.qwen import QwenProvider
+
+        assert QwenProvider._parse_text_concepts("here is a concept about films and stuff") == []
+
+    def test_placeholder_text_still_flagged(self):
+        from src.director.providers.qwen import QwenProvider
+
+        text = "Title: YOUR_ORIGINAL_TITLE_HERE\nThesis: something"
+        concepts = QwenProvider._parse_text_concepts(text)
+        assert concepts
+        assert QwenProvider._has_placeholder_concepts(concepts)

@@ -601,12 +601,21 @@ Plan now:"""
             self.last_raw_output = output
 
             result = self._extract_json(output, "concepts")
-            if not result:
-                last_error = f"Failed to extract JSON from generation output: {output[:400]}"
-                logger.warning(f"Concept parse failed (attempt {attempt + 1}): {last_error}")
-                continue
+            concepts: List[Dict[str, Any]] = []
+            if result:
+                concepts = self._coerce_concepts(result)
+            else:
+                logger.warning(
+                    f"Concept JSON parse failed (attempt {attempt + 1}); "
+                    f"trying plain-text parse. Output: {output[:150]}"
+                )
 
-            concepts = self._coerce_concepts(result)
+            if not concepts:
+                # Last-resort: pull explicit "Title: / Hook: / Thesis:" lines out
+                # of plain-text output. 4B models answer text far more reliably
+                # than nested JSON.
+                concepts = self._parse_text_concepts(output)
+
             if not concepts:
                 last_error = (
                     f"Generation returned empty concepts list. "
@@ -641,6 +650,48 @@ Plan now:"""
             for field in ("title", "hook", "thesis", "why_interesting", "visual_strategy"):
                 if contains_placeholder(concept.get(field)):
                     return True
+
+    @staticmethod
+    def _parse_text_concepts(output: str) -> List[Dict[str, Any]]:
+        """Parse explicit 'Title: / Hook: / Thesis:' lines out of plain text.
+
+        Small instruct models produce reliable JSON much less often than they
+        produce labeled plain text. As a last resort, reconstruct concepts from
+        those labels so a weak JSON follower still yields usable output.
+        """
+        labels = (
+            ("title", "title"),
+            ("hook", "hook"),
+            ("thesis", "thesis"),
+            ("why interesting", "why_interesting"),
+            ("why it matters", "why_interesting"),
+            ("why this matters", "why_interesting"),
+            ("visual strategy", "visual_strategy"),
+            ("tone", "tone"),
+        )
+        concepts: List[Dict[str, Any]] = []
+        current: Dict[str, Any] = {}
+
+        def _flush():
+            nonlocal current
+            if current and current.get("title") and current.get("thesis"):
+                concepts.append(current)
+            current = {}
+
+        for line in (output or "").splitlines():
+            line = line.rstrip()
+            low = line.strip().lower()
+            if low.startswith("concept"):
+                _flush()
+                continue
+            for label, field in labels:
+                if low.startswith(label + ":"):
+                    value = line.split(":", 1)[1].strip().strip('"').strip()
+                    if value:
+                        current[field] = value
+                    break
+        _flush()
+        return concepts
         return False
 
     @staticmethod
