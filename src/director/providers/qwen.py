@@ -782,13 +782,19 @@ Provide refined concept as JSON:
 
             # Generate
             with torch.no_grad():
+                # Vary the RNG so a retry draws a different sample (older
+                # transformers versions reject generate(seed=...)).
+                if seed_override is not None:
+                    torch.manual_seed(42 + seed_override)
+                    if self._device_resolved == "cuda":
+                        torch.cuda.manual_seed_all(42 + seed_override)
+
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=self.max_new_tokens,
                     temperature=self.temperature,
                     top_p=self.top_p,
                     do_sample=True,
-                    seed=seed_override,
                 )
 
             # Decode ONLY the new tokens (drop prompt + chat wrappers).
