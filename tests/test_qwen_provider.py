@@ -18,7 +18,7 @@ class TestQwenProviderInit:
     def test_provider_init_no_model_loaded(self):
         """Provider should not load model during init."""
         provider = QwenProvider(
-            model="Qwen/Qwen3-30B-A3B",
+            model="Qwen/Qwen3-4B-Instruct-2507",
             device="cpu",
             dtype="float32",
         )
@@ -26,12 +26,12 @@ class TestQwenProviderInit:
         assert provider.model is None
         assert provider.tokenizer is None
         assert not provider._initialized
-        assert provider.model_name == "Qwen/Qwen3-30B-A3B"
+        assert provider.model_name == "Qwen/Qwen3-4B-Instruct-2507"
 
     def test_provider_config_storage(self):
         """Provider should store configuration."""
         provider = QwenProvider(
-            model="Qwen/Qwen3-30B-A3B",
+            model="Qwen/Qwen3-4B-Instruct-2507",
             device="cuda",
             temperature=0.7,
             top_p=0.95,

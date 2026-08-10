@@ -75,13 +75,14 @@ Qwen requires PyTorch and Transformers:
 ### Model Size Considerations
 
 **Colab T4 (16GB VRAM):**
-- Qwen3-7B-A0.5B: ✅ Fits easily (default)
-- Qwen3-30B-A3B: ⚠️ May OOM without quantization
-- Qwen3-235B-A22B: ❌ Requires quantization or larger GPU
+- Qwen3-4B-Instruct-2507: ✅ Fits easily (default, fp16 ~8GB)
+- Qwen3-8B (dense): ⚠️ fp16 ~16GB sits at the T4 limit; use 4-bit if you try it
+- Qwen3-30B-A3B (MoE): ⚠️ Needs 4-bit and careful settings on T4
+- Qwen3-235B-A22B (MoE): ❌ Requires quantization or larger GPU
 
 **Colab A100 (40GB VRAM):**
-- Qwen3-30B-A3B: ✅ Fits comfortably
-- Qwen3-235B-A22B: ✅ Fits with careful settings
+- Qwen3-30B-A3B (MoE): ✅ Fits comfortably (fp16 or 4-bit)
+- Qwen3-235B-A22B (MoE): ✅ Fits with careful settings (4-bit)
 
 ### Setup for Real LLM
 
@@ -91,7 +92,7 @@ Qwen requires PyTorch and Transformers:
 
 # For the default T4 model:
 %env DIRECTOR_PROVIDER=qwen
-%env DIRECTOR_MODEL=Qwen/Qwen3-7B-A0.5B
+%env DIRECTOR_MODEL=Qwen/Qwen3-4B-Instruct-2507
 %env DIRECTOR_DEVICE=cuda
 %env DIRECTOR_TEMPERATURE=0.8
 ```
@@ -110,9 +111,9 @@ is the only way to *prove* a real LLM ran:
 export REQUIRE_REAL_LLM=true
 export STUDIO_PROFILE=colab-gpu
 export DIRECTOR_PROVIDER=qwen
-export DIRECTOR_MODEL=Qwen/Qwen3-7B-A0.5B
+export DIRECTOR_MODEL=Qwen/Qwen3-4B-Instruct-2507
 export SCRIPT_PROVIDER=qwen
-export SCRIPT_MODEL=Qwen/Qwen3-7B-A0.5B
+export SCRIPT_MODEL=Qwen/Qwen3-4B-Instruct-2507
 export DIRECTOR_DEVICE=cuda
 ```
 
@@ -125,7 +126,7 @@ director/script when Qwen is unavailable, exactly as before.
 # Enable creative director with real Qwen (non-strict mode)
 export CREATIVE_DIRECTOR_ENABLED=true
 export DIRECTOR_PROVIDER=qwen
-export DIRECTOR_MODEL=Qwen/Qwen3-7B-A0.5B
+export DIRECTOR_MODEL=Qwen/Qwen3-4B-Instruct-2507
 export DIRECTOR_DEVICE=cuda
 
 python src/main.py init --title "Qwen LLM Test" --source tests/fixtures/test_speech.mp4
@@ -171,7 +172,7 @@ All settings can be configured in `configs/app.yaml`:
 director:
   enabled: true
   provider: qwen  # or "mock"
-  model: Qwen/Qwen3-7B-A0.5B  # T4 default; 30B-A3B for A100
+  model: Qwen/Qwen3-4B-Instruct-2507  # T4 default; 30B-A3B for A100
   device: auto  # or "cuda", "cpu"
   dtype: auto   # or "float16", "float32", "bfloat16"
   thinking: false
@@ -182,7 +183,7 @@ director:
 
 script:
   provider: qwen
-  model: Qwen/Qwen3-7B-A0.5B
+  model: Qwen/Qwen3-4B-Instruct-2507
   device: auto
   dtype: auto
   thinking: false
@@ -194,11 +195,11 @@ Environment overrides at runtime:
 
 ```bash
 DIRECTOR_PROVIDER=qwen
-DIRECTOR_MODEL=Qwen/Qwen3-7B-A0.5B
+DIRECTOR_MODEL=Qwen/Qwen3-4B-Instruct-2507
 DIRECTOR_DEVICE=cuda
 DIRECTOR_TEMPERATURE=0.7
 SCRIPT_PROVIDER=qwen
-SCRIPT_MODEL=Qwen/Qwen3-7B-A0.5B
+SCRIPT_MODEL=Qwen/Qwen3-4B-Instruct-2507
 ```
 
 ### Fallback Behavior
@@ -215,7 +216,7 @@ Fallback depends on `REQUIRE_REAL_LLM`:
 ### Performance Expectations
 
 On T4 GPU (15.8GB VRAM):
-- Qwen3-7B-A0.5B model loading: ~30-60s
+- Qwen3-4B-Instruct-2507 model loading: ~20-40s
 - Concept generation (2-3 concepts): ~45-120s
 - Production plan generation: ~30-60s
 - Script generation (narration sections): ~20-60s
@@ -223,8 +224,8 @@ On T4 GPU (15.8GB VRAM):
 
 ### Troubleshooting: Out-of-Memory
 
-The 7B model is fp16 is ~14GB, so it must be loaded **once**, not once per stage.
-These mitigations are built in:
+The default model (4B) is ~8GB in fp16, but still must be loaded **once**, not
+once per stage. These mitigations are built in:
 
 - **Shared model cache**: the director and script stages reuse a single loaded
   model (`QwenProvider` class-level cache) instead of loading two copies.
@@ -236,7 +237,7 @@ These mitigations are built in:
 
 If you still hit `CUDA out of memory`:
 
-1. Use **4-bit** loading (drops the model to ~4GB):
+1. Use **4-bit** loading (drops the 4B model to ~2.5GB):
    ```bash
    export DIRECTOR_DTYPE=4bit
    export SCRIPT_DTYPE=4bit
@@ -248,7 +249,7 @@ If you still hit `CUDA out of memory`:
    allocate big tensors while the model is loaded.
 
 On A100 (40GB VRAM):
-- Qwen3-30B-A3B model loading: ~60-120s
+- Qwen3-30B-A3B (MoE) model loading: ~60-120s
 - Concept generation: ~30-60s
 - Production plan: ~20-40s
 - Full pipeline: ~2-3 minutes

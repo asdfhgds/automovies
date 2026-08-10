@@ -137,8 +137,8 @@ configs/
   - Supports `SCRIPT_DTYPE=4bit` for VRAM-constrained GPUs
 
 - **OOM-safe Qwen loading** (src/director/providers/qwen.py)
-  - Class-level model cache: director + script stages share ONE loaded 7B model
-    (two fp16 copies would exceed a 16GB T4)
+  - Class-level model cache: director + script stages share ONE loaded model
+    (two copies would exceed a 16GB T4)
   - `low_cpu_mem_usage` + `device_map="auto"` + `QWEN_VRAM_RESERVE_GB` headroom
   - SDPA attention; `release_model()` + `empty_cache()` between stages
   - `DIRECTOR_DTYPE=4bit` / `SCRIPT_DTYPE=4bit` NF4 quantized loading (~4GB)
@@ -437,7 +437,8 @@ grep -A 20 "profiles:" configs/profiles.yaml
   - `src/app/orchestrator.py` - Strict guard phase, real Qwen script stage, provider manifest
   - `src/director/provider_factory.py` - Fixed `src.`-prefix import bug; added strict provider checks
   - `src/director/planner.py` - Fixed `src.`-prefix import bug
-  - `src/director/providers/qwen.py` - Default model 7B-A0.5B, `generate_text`, load/generation timing
+  - `src/director/providers/qwen.py` - Default model 4B-Instruct-2507,
+    `generate_text`, load/generation timing
   - `src/director/providers/transport_base.py` / `local.py` - Context manager strict flag
   - `src/director/providers/api.py` - Single-device config for real LLM
   - `src/director/creative_director.py` - Multi-scene evidence-driven selection
@@ -445,7 +446,7 @@ grep -A 20 "profiles:" configs/profiles.yaml
   - `src/understanding/transcription/` - Multi-scene association support
   - `src/scene_selection/selector.py` - Evidence-tag-driven multi-scene selection
   - `src/utils/doctor.py` - STRICT GPU MODE section, transformers/accelerate/model info, JSON keys
-  - `configs/app.yaml` - Script config; default model Qwen/Qwen3-7B-A0.5B
+  - `configs/app.yaml` - Script config; default model Qwen/Qwen3-4B-Instruct-2507
   - `configs/profiles.yaml` - colab-gpu script→qwen; qwen provider block + script provider block
   - Documentation: `COLAB_INSTRUCTIONS.md`, `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`
 

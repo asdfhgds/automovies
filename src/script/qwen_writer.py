@@ -163,7 +163,7 @@ def _normalize_sections(raw: Any, structure: List[Dict[str, Any]], selected_scen
 
 def generate_script_qwen(
     project_dir: Path,
-    model: str = "Qwen/Qwen3-7B-A0.5B",
+    model: str = "Qwen/Qwen3-4B-Instruct-2507",
     device: str = "cuda",
     max_new_tokens: int = 1024,
     thinking: bool = False,
@@ -176,9 +176,9 @@ def generate_script_qwen(
     sections, and writes script.json in the canonical schema.
 
     `dtype` defaults to the SCRIPT_DTYPE env var (or "auto"). Use "4bit" to load
-    the model in NF4 (~4GB) when VRAM is tight. The model is shared with the
-    director stage through QwenProvider's class-level cache, so the 7B weights
-    are only resident once.
+    the model in NF4 (~2.5GB for the 4B default) when VRAM is tight. The model is
+    shared with the director stage through QwenProvider's class-level cache, so
+    the weights are only resident once.
 
     Returns the script dict (also persisted). Raises on any failure.
     """

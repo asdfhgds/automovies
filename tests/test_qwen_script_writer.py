@@ -20,14 +20,14 @@ from script import qwen_writer
 def test_qwen_reuses_cached_model(monkeypatch):
     """A second QwenProvider for the same model must NOT load the model again.
 
-    The class-level cache is what keeps the 7B weights resident only once on a
+    The class-level cache is what keeps the model weights resident only once on a
     16GB T4 (director + script stages). We prove the short-circuit by failing the
     test if `transformers` is ever imported during init.
     """
     from director.providers import qwen as qwen_module
 
     fake_model, fake_tok = object(), object()
-    key = ("Qwen/Qwen3-7B-A0.5B", "cpu", "torch.float32", False)
+    key = ("Qwen/Qwen3-4B-Instruct-2507", "cpu", "torch.float32", False)
     qwen_module._MODEL_CACHE[key] = (fake_model, fake_tok, "cpu")
 
     real_import = __import__
@@ -39,7 +39,7 @@ def test_qwen_reuses_cached_model(monkeypatch):
 
     monkeypatch.setattr("builtins.__import__", guard)
 
-    provider = qwen_module.QwenProvider(model="Qwen/Qwen3-7B-A0.5B", device="cpu", dtype="float32")
+    provider = qwen_module.QwenProvider(model="Qwen/Qwen3-4B-Instruct-2507", device="cpu", dtype="float32")
     provider._initialize()
 
     assert provider.model is fake_model

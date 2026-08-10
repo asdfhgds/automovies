@@ -193,7 +193,7 @@ def start_pipeline(project_id: str):
 
     # Free GPU memory between heavy stages. The Qwen model stays cached (class-level
     # cache), so the script stage can reuse it when the model name matches and we
-    # don't load two 7B copies into a 16GB T4.
+    # don't load two model copies into a 16GB T4.
     try:
         import torch
         if torch.cuda.is_available():
@@ -212,7 +212,7 @@ def start_pipeline(project_id: str):
         use_qwen_script = strict or sp == 'qwen'
         if use_qwen_script:
             from script.qwen_writer import generate_script_qwen
-            model = os.getenv('SCRIPT_MODEL') or 'Qwen/Qwen3-7B-A0.5B'
+            model = os.getenv('SCRIPT_MODEL') or 'Qwen/Qwen3-4B-Instruct-2507'
             device = os.getenv('SCRIPT_DEVICE', 'auto')
             if strict and device in ('auto', 'cpu'):
                 require_cuda()

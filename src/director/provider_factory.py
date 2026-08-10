@@ -54,7 +54,7 @@ def get_llm_provider_from_config(config: Dict[str, Any]):
             from director.providers.qwen import QwenProvider
 
             # Extract Qwen-specific config
-            model = config.get("model", "Qwen/Qwen3-7B-A0.5B")
+            model = config.get("model", "Qwen/Qwen3-4B-Instruct-2507")
             device = config.get("device", "auto")
             dtype = config.get("dtype", "auto")
             thinking = config.get("thinking", False)

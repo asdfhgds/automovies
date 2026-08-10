@@ -143,7 +143,7 @@ def run_checks():
     out['require_real_llm'] = require_real_llm
     out['strict_gpu_mode'] = require_real_llm and profile == 'colab-gpu'
     out['director_provider'] = os.getenv('DIRECTOR_PROVIDER', 'qwen' if require_real_llm else 'mock')
-    out['director_model'] = os.getenv('DIRECTOR_MODEL', 'Qwen/Qwen3-7B-A0.5B')
+    out['director_model'] = os.getenv('DIRECTOR_MODEL', 'Qwen/Qwen3-4B-Instruct-2507')
     out['script_provider'] = os.getenv('SCRIPT_PROVIDER', 'qwen' if require_real_llm else 'mock')
     out['script_model'] = os.getenv('SCRIPT_MODEL', out['director_model'])
 

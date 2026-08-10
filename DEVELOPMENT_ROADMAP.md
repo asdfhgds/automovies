@@ -30,7 +30,7 @@
   hard-fail guards; deterministic/mock providers are refused on GPU boxes
 - ✅ **Provider manifest**: `provider_manifest.json` records provider, model, device,
   and load/generation timings each run
-- ✅ **Default model**: `Qwen/Qwen3-7B-A0.5B` (fits T4 16GB); `30B-A3B` for A100
+- ✅ **Default model**: `Qwen/Qwen3-4B-Instruct-2507` (fits T4 16GB); `30B-A3B` for A100
 - ✅ **Colab artifacts**: `notebooks/colab_qwen_validation.ipynb` (14 cells) +
   `scripts/colab_setup.sh` (idempotent setup)
 - ✅ **Tests**: 17 new (strict mode + Qwen script writer), 69 total passing
@@ -268,8 +268,8 @@ Improve quality and reduce costs through iteration.
 - **Transcription**: Whisper (openai), WhisperX
 - **Scene Detection**: PySceneDetect
 - **Director (Deterministic)**: Lexical keyword matching
-- **Director (Creative)**: Qwen3 7B-A0.5B via Transformers on CUDA (or mock locally)
-- **Script Generation**: Qwen3 7B-A0.5B (`script/qwen_writer.py`) or deterministic
+- **Director (Creative)**: Qwen3-4B-Instruct-2507 via Transformers on CUDA (or mock locally)
+- **Script Generation**: Qwen3-4B-Instruct-2507 (`script/qwen_writer.py`) or deterministic
 - **Clip Extraction**: FFmpeg
 - **Video Assembly**: FFmpeg
 - **Testing**: pytest, mock LLM provider

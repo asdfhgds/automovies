@@ -17,7 +17,7 @@ transcription:
 director:
   enabled: true
   provider: qwen
-  model: Qwen/Qwen3-7B-A0.5B
+  model: Qwen/Qwen3-4B-Instruct-2507
   device: auto
   dtype: auto
   thinking: false
@@ -28,7 +28,7 @@ director:
 
 script:
   provider: qwen
-  model: Qwen/Qwen3-7B-A0.5B
+  model: Qwen/Qwen3-4B-Instruct-2507
   device: auto
   dtype: auto
   thinking: false

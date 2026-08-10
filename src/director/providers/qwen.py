@@ -32,7 +32,7 @@ class QwenProvider(LLMProvider):
 
     def __init__(
         self,
-        model: str = "Qwen/Qwen3-7B-A0.5B",
+        model: str = "Qwen/Qwen3-4B-Instruct-2507",
         device: str = "auto",
         dtype: str = "auto",
         thinking: bool = False,
@@ -45,7 +45,7 @@ class QwenProvider(LLMProvider):
         Initialize Qwen provider with lazy model loading.
 
         Args:
-            model: Model identifier from HuggingFace (e.g., "Qwen/Qwen3-7B-A0.5B")
+            model: Model identifier from HuggingFace (e.g., "Qwen/Qwen3-4B-Instruct-2507")
             device: "auto", "cuda", or "cpu"
             dtype: "auto", "float16", "float32"
             thinking: Enable extended thinking if supported

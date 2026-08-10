@@ -32,7 +32,7 @@ profiles:
       extractor: ffmpeg
 
 # Provider-specific configuration
-# Each provider can be overridden via environment variables (e.g., DIRECTOR_MODEL=Qwen/Qwen3-7B-A0.5B)
+# Each provider can be overridden via environment variables (e.g., DIRECTOR_MODEL=Qwen/Qwen3-4B-Instruct-2507)
 
 providers:
   llm:
@@ -40,7 +40,7 @@ providers:
       type: mock
       enabled: true
     qwen:
-      model: Qwen/Qwen3-7B-A0.5B
+      model: Qwen/Qwen3-4B-Instruct-2507
       device: auto
       dtype: auto
       thinking: false
@@ -68,7 +68,7 @@ providers:
     qwen:
       type: qwen
       enabled: true
-      model: Qwen/Qwen3-7B-A0.5B
+      model: Qwen/Qwen3-4B-Instruct-2507
       device: auto
       dtype: auto
       thinking: false

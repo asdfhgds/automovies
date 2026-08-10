@@ -15,7 +15,7 @@ def qwen_provider():
         
         # Use CPU for testing (can be overridden via env)
         device = os.getenv("QWEN_DEVICE", "cpu")
-        model = os.getenv("QWEN_MODEL", "Qwen/Qwen3-30B-A3B")
+        model = os.getenv("QWEN_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
         
         provider = QwenProvider(
             model=model,
