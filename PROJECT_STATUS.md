@@ -1,6 +1,6 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: After Real Qwen GPU Validation Session
+**Last Updated**: Colab T4 GPU Validation PASSED (Qwen/Qwen3-4B-Instruct-2507)
 
 ## Executive Summary
 
@@ -15,7 +15,10 @@ The Autonomous Movie Studio project now has a **complete, modular architecture**
 - **Strict GPU mode (`REQUIRE_REAL_LLM=true`)**: refuses mock/deterministic fallback on GPU boxes so a real Qwen run is provable
 - **Real Qwen script writer** (`script/qwen_writer.py`) integrated into the orchestrator
 - **Provider manifest** (`provider_manifest.json`) recording exactly which providers/models executed
-- **51+ passing tests** (69 including tests added this session) with zero regressions
+- **51+ passing tests** (86 passing including tests added this session) with zero regressions
+- **✅ Colab T4 GPU validation PASSED**: the real Qwen director + script stages ran
+  end-to-end on CUDA in strict mode and produced genuine concepts and narration
+  (no placeholder echo, no OOM)
 
 ## Current Architecture
 
@@ -322,12 +325,11 @@ providers:
 
 ## Known Limitations
 
-1. **No quantization support** (int8/int4) - limits which GPUs work with which models
-2. **Keyword-based ranking** - the base ranker is deterministic lexical scoring; evidence tags are now used by selection, but the base ranker still needs an LLM-aware pass
-3. **Deterministic director/script** - used only outside strict mode; strict mode requires real Qwen and refuses fallbacks
-4. **Mock generation providers** - real TTS/image/video integration deferred
-5. **No human feedback loop** - one-shot generation only
-6. **No cost tracking** - no visibility into token usage
+1. **Keyword-based ranking** - the base ranker is deterministic lexical scoring; evidence tags are now used by selection, but the base ranker still needs an LLM-aware pass
+2. **Small-model fidelity** - Qwen3-4B occasionally echoes prompt examples or produces loose JSON; guarded by placeholder detection, retry, and a plain-text fallback, but a 7B+ model would be more reliable
+3. **Mock generation providers** - real TTS/image/video integration deferred
+4. **No human feedback loop** - one-shot generation only
+5. **No cost tracking** - no visibility into token usage
 
 ## Test Commands
 
@@ -387,8 +389,21 @@ python src/main.py run --project-id <id>
 - ✅ `notebooks/colab_qwen_validation.ipynb` (14 cells) drives the real director
   + script Qwen path on a T4 through the same code the orchestrator uses
 - ✅ `scripts/colab_setup.sh` idempotent Colab dependency setup
-- ⏳ Execute the notebook on a real T4/A100 and paste `provider_manifest.json`
-  into the validation ticket
+- ✅ **Executed on a real T4 and PASSED** (`provider_manifest.json` attached to the
+  validation ticket): `director_real_generation: true`, `script_real_generation: true`,
+  `transcript_real: true`, model `Qwen/Qwen3-4B-Instruct-2507`, device `cuda`,
+  director stage ~119s / script generation ~57s. The model loaded once (shared
+  class-level cache; script `qwen_load_time_sec: 0.0`) so no OOM on a 16GB T4.
+  Output was genuine: a specific, evidence-grounded thesis, a real 5-section
+  production plan, and a coherent multi-paragraph narration referencing the scene.
+- ✅ Robustness fixes proven in the successful run:
+  - Placeholder-echo guard (`src/utils/json_guard.py`): a 4B model that copies the
+    prompt's example JSON is detected and retried instead of silently accepted
+  - Prompt examples replaced with ALL-CAPS markers + "replace, don't copy"
+  - Plain-text fallback parses `Title: / Hook: / Thesis:` lines when JSON fails
+  - Chat-template wrapping + decode-only-new-tokens for instruct models
+  - Notebook guards against stale kernels (re-imports from disk if the loaded
+    `qwen.py` is pre-fix) and against reusing a stale validation clip
 
 ### 5. TTS Integration
 - Implement Kokoro or Qwen3-TTS provider
@@ -425,6 +440,7 @@ grep -A 20 "profiles:" configs/profiles.yaml
 
 - **Created**:
   - `src/utils/strict.py` - Strict GPU mode guards (`require_cuda`, `require_real_provider`)
+  - `src/utils/json_guard.py` - Placeholder-echo detection for small LLMs
   - `src/script/qwen_writer.py` - Real Qwen narration script writer
   - `src/script/__init__.py` - Package export
   - `scripts/colab_setup.sh` - Idempotent Colab dependency setup
@@ -438,7 +454,10 @@ grep -A 20 "profiles:" configs/profiles.yaml
   - `src/director/provider_factory.py` - Fixed `src.`-prefix import bug; added strict provider checks
   - `src/director/planner.py` - Fixed `src.`-prefix import bug
   - `src/director/providers/qwen.py` - Default model 4B-Instruct-2507,
-    `generate_text`, load/generation timing
+    `generate_text`, load/generation timing, shared model cache, 4-bit loading,
+    chat-template prompts, hardened JSON extraction + repair, placeholder guard,
+    seed-jitter retry, plain-text concept fallback
+  - `src/script/qwen_writer.py` - Placeholder-free script prompt + narration echo guard
   - `src/director/providers/transport_base.py` / `local.py` - Context manager strict flag
   - `src/director/providers/api.py` - Single-device config for real LLM
   - `src/director/creative_director.py` - Multi-scene evidence-driven selection
@@ -453,30 +472,31 @@ grep -A 20 "profiles:" configs/profiles.yaml
 ## Test Results
 
 ```
-69 fast tests ............................. PASS
-  - 26 Qwen provider tests
+86 fast tests ............................. PASS
+  - 26 Qwen provider tests (incl. placeholder-guard + plain-text fallback)
   - 10 Creative director tests
-  - 17 Strict-mode + Qwen script writer tests (new)
+  - 17 Strict-mode + Qwen script writer tests
   - 5 Multi-scene selection tests
   - Multi-clip rendering test (FFmpeg)
   - Existing ranking / selection / extraction / timeline tests
 2 skipped (env-gated real-model tests)
 8 deselected (slow / llm_integration)
 ─────────────────────────────────────────
-TOTAL: 69 passing, 0 failures, ~16s runtime
+TOTAL: 86 passing, 0 failures, ~14s runtime
 ```
 
 ## Status for Handoff
 
 ✅ **Architecture**: Complete and validated
 ✅ **Local Development**: Ready on weak laptops
-✅ **Testing**: Comprehensive, fast (69 passing)
+✅ **Testing**: Comprehensive, fast (86 passing)
 ✅ **Multi-Scene Cut**: Selection, extraction, timeline, render, and QC wired end-to-end
 ✅ **Typed Evidence Selection**: Director-driven evidence typing used by selection
 ✅ **Real Script Provider**: Qwen narration writer integrated into the orchestrator
 ✅ **Strict GPU Mode**: Hard-fail validation with provider manifest; doctor reporting
+✅ **Colab GPU Validation**: PASSED on a real T4 with Qwen/Qwen3-4B-Instruct-2507
+   (real concepts + narration, no OOM, no placeholder echo)
 ✅ **Documentation**: Profiles, provider system, configuration, Colab flow
-⏳ **GPU Validation**: Scripts+notebook ready; needs one Colab execution to confirm
 ✅ **Timeline Rendering**: Local FFmpeg rendering integrated and validated
 ⏳ **Real TTS/Image/Video**: Mocks complete, integration pending
 
@@ -498,4 +518,4 @@ To continue:
 6. Test on Colab
 7. Update this status document
 
-No blockers. Ready for GPU validation or next feature.
+No blockers. Colab GPU validation passed; next features are TTS/image/video integration.
