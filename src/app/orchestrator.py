@@ -322,12 +322,51 @@ def start_pipeline(project_id: str):
     except Exception as e:
         print(f"Visual generation failed: {e}")
 
-    # Phase: Audio (TTS)
+    # Phase: Audio (TTS) — real provider or mock; strict REQUIRES real TTS.
+    tts_real = False
+    t0 = time.monotonic()
     try:
-        from audio.tts_adapter import synthesize_voice
+        from audio.tts_adapter import synthesize_voice, _tts_config
+        from generation.provider_factory import get_tts_provider
+        from utils.strict import require_real_tts, tts_strict_mode_enabled
+
+        tts_config = _tts_config()
+        tts_provider_obj = get_tts_provider(tts_config)
+        if tts_strict_mode_enabled():
+            tts_provider_obj = require_real_tts(tts_provider_obj, 'TTS')
         synthesize_voice(project_dir)
+        pname = getattr(tts_provider_obj, 'name', 'unknown')
+        tts_real = bool(pname not in ('mock', 'unknown')) and not bool(getattr(tts_provider_obj, 'mock', False))
+        if tts_strict_mode_enabled() and not tts_real:
+            raise RuntimeError(
+                "REQUIRE_REAL_TTS=true but narration was not produced by a real "
+                "TTS model. Refusing mock audio in the real-movie run."
+            )
+        manifest['tts_provider'] = getattr(tts_provider_obj, 'name', 'unknown')
+        manifest['tts_model'] = getattr(tts_provider_obj, 'model', None)
+        manifest['tts_device'] = getattr(tts_provider_obj, 'device', None)
+        manifest['tts_real'] = tts_real
+        manifest['tts_seconds'] = round(time.monotonic() - t0, 2)
     except Exception as e:
+        if os.getenv('REQUIRE_REAL_TTS', 'false').lower() == 'true':
+            raise RuntimeError(f"TTS failed in strict real-TTS mode: {e}") from e
         print(f"TTS failed: {e}")
+        manifest['tts_error'] = str(e)
+
+    # Phase: TTS benchmark (optional; records provider/device/time/duration/sr/status)
+    try:
+        if os.getenv('RUN_TTS_BENCHMARK', 'false').lower() == 'true':
+            from generation.tts_benchmark import benchmark_tts
+            from utils.io import read_json
+            script_data = read_json(project_dir / 'script.json') or {}
+            bench = benchmark_tts(
+                text=script_data.get('voiceover_text', ''),
+                output_dir=project_dir / 'reports',
+                narration=script_data.get('narration_properties'),
+            )
+            manifest['tts_benchmark'] = bench.get('results', [])
+    except Exception as e:
+        print(f"TTS benchmark failed: {e}")
 
     # Phase: Assembly
     try:

@@ -97,11 +97,20 @@ def _get_provider_status():
     }
     
     # TTS providers
-    providers['tts'] = {
-        'mock': True,  # Always available
-        'kokoro': False,  # Would need specific package
-        'qwen3_tts': _check_import('transformers'),
-    }
+    try:
+        from generation.provider_factory import available_tts_providers
+
+        tts_providers = available_tts_providers()
+        providers['tts'] = {'mock': True}
+        for name, info in tts_providers.items():
+            providers['tts'][name] = info.get('available', False)
+    except Exception:
+        providers['tts'] = {
+            'mock': True,  # Always available
+            'kokoro': _check_import('kokoro'),
+            'chatterbox': _check_import('chatterbox'),
+            'qwen3_tts': _check_import('qwen3_tts'),
+        }
     
     # Image providers
     providers['image'] = {
@@ -146,6 +155,14 @@ def run_checks():
     out['director_model'] = os.getenv('DIRECTOR_MODEL', 'Qwen/Qwen3-4B-Instruct-2507')
     out['script_provider'] = os.getenv('SCRIPT_PROVIDER', 'qwen' if require_real_llm else 'mock')
     out['script_model'] = os.getenv('SCRIPT_MODEL', out['director_model'])
+
+    # Strict real-TTS mode metadata
+    require_real_tts = os.getenv('REQUIRE_REAL_TTS', 'false').lower() == 'true'
+    out['require_real_tts'] = require_real_tts
+    out['strict_tts_mode'] = require_real_tts and profile == 'colab-gpu'
+    out['tts_provider'] = os.getenv('TTS_PROVIDER', 'kokoro' if require_real_tts else 'mock')
+    tts_available = out.get('providers', {}).get('tts', {}).get(out['tts_provider'], False)
+    out['tts_ok'] = not require_real_tts or tts_available
 
     cuda_ok = out['torch'].get('cuda_available', False)
     transformers_ok = out['transformers']
@@ -208,6 +225,18 @@ def print_report(report=None):
         else:
             print("[FATAL] Strict mode required but CUDA/Transformers/Accelerate missing. "
                   "GPU validation CANNOT proceed with mocks.")
+
+    print('\n' + '-'*60)
+    print('STRICT REAL-TTS MODE (REQUIRE_REAL_TTS)')
+    print('-'*60)
+    print(f"REQUIRE_REAL_TTS: {'[ON]' if report.get('require_real_tts') else '[OFF]'}")
+    print(f"TTS provider: {report.get('tts_provider')}")
+    if report.get('require_real_tts'):
+        if report.get('tts_ok'):
+            print("[OK] Real TTS provider available for production narration")
+        else:
+            print("[FATAL] REQUIRE_REAL_TTS=true but the TTS provider is not installed. "
+                  "Refusing mock narration.")
     
     print('\n' + '-'*60)
     print('MODELS & ADAPTERS')

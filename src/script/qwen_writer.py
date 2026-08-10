@@ -261,6 +261,9 @@ def generate_script_qwen(
         meta = _load_json(meta_path) or {}
         project_id = meta.get("project_id", project_id)
 
+    from script.narration import narration_properties_from_env
+
+    narration_props = narration_properties_from_env(plan)
     script = {
         "project_id": project_id or project_dir.name,
         "voiceover_text": voiceover,
@@ -268,6 +271,7 @@ def generate_script_qwen(
         "cta": "Subscribe for more",
         "style_notes": f"{tone} commentary with a concise, cinematic pace",
         "scene_ids": [s.get("scene_id") for s in selected],
+        "narration_properties": narration_props,
         "script_provider": "qwen",
         "script_model": model,
         "script_device": provider.device_resolved or device,

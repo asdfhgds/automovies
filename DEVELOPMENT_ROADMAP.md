@@ -118,21 +118,20 @@ Generate narration script and synthesize voice for video essay.
 ### Effort: ~30-50 hours
 
 ### Current State
-- ✅ Script generation stub exists (`src/script/writer.py`)
-- ✅ TTS adapter stub exists (`src/audio/tts_adapter.py`)
-- ❌ No real script generation logic
-- ❌ No real TTS provider integrated
+- ✅ Real Qwen script generation (`src/script/qwen_writer.py`) integrated into the orchestrator
+- ✅ TTS adapter with real providers: Kokoro (default), Chatterbox, Qwen3-TTS
+- ✅ Director-controlled narration properties (tone/emotion/pace/energy/intensity)
+- ✅ Cinematic audio mix: film/music ducking, loudnorm, true-peak limiter, burned subtitles
+- ✅ TTS benchmark CLI + GPU notebook ready
+- ⏳ Real-movie + real-TTS GPU run pending (user-supplied movie)
 
 ### Tasks
 
-#### 2.1 Script Generation (16-20 hours)
-- [ ] Design script format (segments, timing, speaker notes, subtitles)
-- [ ] Implement script writer using LLM (Claude/GPT-4 recommended)
-  - Input: director_plan, scene_index, transcript, tone
-  - Output: narration script with timing
-- [ ] Add scene-matched narration (sync with visual elements)
-- [ ] Generate subtitles/captions
-- [ ] Write tests (mock LLM testing, structure validation)
+#### 2.1 Script Generation (16-20 hours) ✅ COMPLETE
+- [x] Design script format (segments, timing, speaker notes, subtitles)
+- [x] Implement script writer using Qwen (`src/script/qwen_writer.py`)
+- [x] Scene-matched narration (sync with visual elements) + subtitle generation
+- [x] Tests (mock LLM testing, structure validation)
 
 **Example Output**:
 ```json
@@ -149,34 +148,29 @@ Generate narration script and synthesize voice for video essay.
 }
 ```
 
-#### 2.2 TTS Integration (12-20 hours)
-- [ ] Evaluate TTS options:
-  - Qwen3-TTS (low latency, good quality)
-  - Chatterbox (multilingual, expressive)
-  - ElevenLabs (natural voices)
-  - Google Cloud TTS (reliable)
-- [ ] Implement TTS adapter
-- [ ] Add voice selection/customization
-- [ ] Handle multilingual narration
-- [ ] Write tests
+#### 2.2 TTS Integration (12-20 hours) ✅ COMPLETE
+- [x] Evaluate TTS options → Kokoro-82M (default), Chatterbox, Qwen3-TTS
+- [x] Implement TTS provider interface + factory (`TTS_PROVIDER` switch)
+- [x] Voice selection/customization (provider-specific: Kokoro voices, Chatterbox clone, Qwen ref speech)
+- [x] Narration-property handling (emotion/pace/energy per provider capability)
+- [x] Tests (provider unit tests, strict-mode tests, adapter tests)
 
-#### 2.3 Script-TTS Sync (4-8 hours)
-- [ ] Ensure narration timing matches intended duration
-- [ ] Handle narration pacing (fast, normal, slow)
-- [ ] Add silence/pauses between sections
-- [ ] Test sync with video timeline
+#### 2.3 Script-TTS Sync (4-8 hours) ✅ COMPLETE
+- [x] Narration pacing honored (speed per provider)
+- [x] Silence padding in render pipeline
+- [x] Sync verified via local E2E render (narration fits timeline, no clipping)
 
-#### 2.4 Testing & Validation (2-4 hours)
-- [ ] Test script generation with real LLM
-- [ ] Test TTS output quality
-- [ ] Test sync with visual elements
-- [ ] Integration test: full pipeline with script + TTS
+#### 2.4 Testing & Validation (2-4 hours) ⏳ PARTIAL
+- [x] TTS provider unit tests + strict-mode tests (no model load)
+- [x] Benchmark CLI across providers → `reports/tts_benchmark.json`
+- [ ] Test real TTS output quality on GPU (real-movie notebook run)
+- [ ] Integration test: full pipeline with real script + real TTS (pending GPU run)
 
 ### Success Criteria
-- [ ] Script generation produces coherent narration matching director thesis
-- [ ] TTS produces natural-sounding voice
-- [ ] Narration duration matches production plan timing
-- [ ] Full pipeline: video → director → script → TTS → rendered output
+- [x] Script generation produces coherent narration matching director thesis
+- [x] TTS providers integrated behind one interface; mock rejected in strict mode
+- [x] Narration duration fits production plan timing (local E2E render OK)
+- [x] Full pipeline: video → director → script → TTS → rendered output (validated locally with mocks; real-TTS GPU run pending)
 
 ---
 
@@ -275,10 +269,9 @@ Improve quality and reduce costs through iteration.
 - **Testing**: pytest, mock LLM provider
 
 ### To Be Integrated
-- **TTS**: Qwen3-TTS, Chatterbox, ElevenLabs
-- **Image Generation**: Stable Diffusion, Midjourney, DALL-E 3
+- **Image Generation**: Stable Diffusion, ComfyUI, Midjourney, DALL-E 3
 - **Stock Footage**: Envato, Getty, Pexels
-- **Video Composition**: FFmpeg, moviepy, OpenCV
+- **Video Composition**: advanced montage/visual effects beyond FFmpeg+libass
 - **YouTube**: youtube-dl, PyYouTube, selenium
 
 ---
@@ -288,7 +281,7 @@ Improve quality and reduce costs through iteration.
 | Phase | Effort | Timeline | Dependencies |
 |-------|--------|----------|--------------|
 | 1. Real LLM | 20-40h | 1-2 weeks | None |
-| 2. Script & TTS | 30-50h | 2-3 weeks | Phase 1 |
+| 2. Script & TTS | 30-50h | 2-3 weeks | Phase 1 | ✅ done (GPU real-TTS run pending) |
 | 3. Visual Gen | 40-60h | 3-4 weeks | Phase 2 |
 | 4. YouTube | 20-30h | 1-2 weeks | Phase 3 (optional) |
 | 5. Optimization | 20-30h | 2-3 weeks | All phases |
@@ -301,8 +294,9 @@ Improve quality and reduce costs through iteration.
 ### High Priority (Do First)
 1. ✅ Real Qwen LLM provider (Phase 1 — DONE, tested on GPU path; Colab run pending)
 2. ✅ Script generation via LLM (Qwen) — subsumed by the real script writer
-3. ⏳ Execute `notebooks/colab_qwen_validation.ipynb` on T4 and attach the manifest
-4. ⏳ Real TTS (Phase 2) — **NEXT TASK**: Qwen3-TTS / Chatterbox / Kokoro
+3. ✅ Real TTS (Phase 2) — Kokoro / Chatterbox / Qwen3-TTS + audio mix + benchmark
+4. ⏳ Execute `notebooks/colab_real_movie_tts.ipynb` on T4/A100 with a user-supplied movie → attach manifest + real MP4
+5. ⏳ Evaluate several real videos; document weaknesses → decide next milestone
 
 ### Medium Priority (Do After)
 4. Integrate stock footage API
@@ -324,14 +318,19 @@ Improve quality and reduce costs through iteration.
 - [x] Documentation complete (CREATIVE_DIRECTOR_GUIDE.md, COLAB_INSTRUCTIONS.md updated)
 - [x] No regressions (69 tests passing)
 - [x] End-to-end path exercised locally (strict mode fails safely without CUDA)
-- [ ] Colab execution of the validation notebook (final proof on T4/A100)
+- [x] Colab execution of the validation notebook — PASSED on real T4 with Qwen/Qwen3-4B-Instruct-2507 (real concepts + narration, no OOM)
 - [x] PROJECT_STATUS.md updated
 
-### Phase 2 (NEXT — Voice Generation & Scriptwriting)
-- [ ] Real script generation w/ Qwen — **DONE** (see `src/script/qwen_writer.py`)
-- [ ] TTS integration (Qwen3-TTS / Chatterbox / Kokoro)
-- [ ] Script-TTS sync and pacing
-- [ ] Full pipeline: video → director (Qwen) → script (Qwen) → TTS → rendered output
+### Phase 2 (Voice Generation & Scriptwriting) — TTS COMPLETE, GPU run pending
+- [x] Real script generation w/ Qwen (`src/script/qwen_writer.py`)
+- [x] TTS integration: Kokoro (default), Chatterbox, Qwen3-TTS behind one interface
+- [x] Director-controlled narration properties (tone/emotion/pace/energy/intensity)
+- [x] TTS benchmark CLI + `RUN_TTS_BENCHMARK=true` hook (`reports/tts_benchmark.json`)
+- [x] Strict real-TTS mode (`REQUIRE_REAL_TTS=true`, no mock audio)
+- [x] Cinematic audio mix: film/music ducking, loudnorm, true-peak limiter, burned subtitles
+- [x] GPU notebook `notebooks/colab_real_movie_tts.ipynb` + `scripts/colab_tts_setup.sh`
+- [ ] **Run the real-movie GPU pipeline** (user-supplied movie, T4/A100) → real MP4
+- [ ] Evaluate several real videos; document weaknesses → decide next milestone
 
 ### Handoff Notes for Next Developer
 

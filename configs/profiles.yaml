@@ -25,7 +25,7 @@ profiles:
       llm: qwen
       transcription: whisperx
       script: qwen
-      tts: mock
+      tts: kokoro
       image: mock
       video: mock
     editing:
@@ -80,15 +80,27 @@ providers:
       type: mock
       enabled: true
     kokoro:
-      model: "kokoro-v0_19.pth"
-      voice: "default"
+      type: kokoro
+      model: "hexgrad/Kokoro-82M"
+      voice: "am_adam"
       language: "en"
+      device: auto
       emotion: "neutral"
       speaking_rate: 1.0
-    qwen3_tts:
-      model: "Qwen/Qwen3-TTS"
-      voice: "default"
+    chatterbox:
+      type: chatterbox
+      model: "resembleai/chatterbox"
+      voice_path: null
       language: "en"
+      device: auto
+      dtype: auto
+    qwen3_tts:
+      type: qwen3_tts
+      model: "Qwen/Qwen3-TTS"
+      voice: "Chelsie"
+      language: "en"
+      device: auto
+      dtype: auto
   
   image:
     mock:

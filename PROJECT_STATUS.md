@@ -1,6 +1,9 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: Colab T4 GPU Validation PASSED (Qwen/Qwen3-4B-Instruct-2507)
+**Last Updated**: Real TTS milestone — Kokoro/Chatterbox/Qwen3-TTS providers +
+audio pipeline (ducking, normalization, no-clipping, burned subtitles) + GPU
+benchmark + Colab real-movie notebook. Local E2E render validated; real-TTS GPU
+run pending (user-supplied movie, see `notebooks/colab_real_movie_tts.ipynb`).
 
 ## Executive Summary
 
@@ -13,12 +16,14 @@ The Autonomous Movie Studio project now has a **complete, modular architecture**
 - **Quality control and validation** systems
 - **Real WhisperX, PySceneDetect, and Qwen LLM** integration
 - **Strict GPU mode (`REQUIRE_REAL_LLM=true`)**: refuses mock/deterministic fallback on GPU boxes so a real Qwen run is provable
+- **Strict real-TTS mode (`REQUIRE_REAL_TTS=true`)**: refuses mock/pyttsx3 audio in production runs
+- **Real open-source TTS providers**: Kokoro (default), Chatterbox, Qwen3-TTS behind one `TTSProvider` interface
+- **Director-controlled narration properties**: tone/emotion/pace/energy/dramatic-intensity, honored per provider capability
+- **TTS benchmarking**: same narration across providers, recording model/device/gen-time/duration/sample-rate/status
+- **Cinematic audio mix**: film-ducking, music-ducking, EBU R128 normalization, true-peak limiter, burned subtitles
 - **Real Qwen script writer** (`script/qwen_writer.py`) integrated into the orchestrator
 - **Provider manifest** (`provider_manifest.json`) recording exactly which providers/models executed
-- **51+ passing tests** (86 passing including tests added this session) with zero regressions
-- **✅ Colab T4 GPU validation PASSED**: the real Qwen director + script stages ran
-  end-to-end on CUDA in strict mode and produced genuine concepts and narration
-  (no placeholder echo, no OOM)
+- **112+ passing tests** (fast suite ~50s) with zero regressions; real-model tests explicitly gated
 
 ## Current Architecture
 
@@ -43,9 +48,9 @@ FFmpeg Clip Extraction (real)
   ↓
 Script Generation (real Qwen or deterministic; strict mode requires Qwen)
   ↓
-TTS Synthesis (mock)
+TTS Synthesis (real Kokoro/Chatterbox/Qwen3-TTS or mock; strict mode requires real)
   ↓
-Timeline Assembly
+Cinematic Audio Mix (ducking + loudnorm + true-peak limiter + burned subtitles)
   ↓
 QC Validation
   ↓
@@ -192,11 +197,12 @@ configs/
   - ImageProvider: Image generation
   - VideoProvider: Video generation
 
-- **Mock Providers** (src/generation/mock.py)
-  - MockScriptProvider: Deterministic placeholder scripts
-  - MockTTSProvider: Silent WAV file generation
-  - MockImageProvider: PNG placeholder generation
-  - MockVideoProvider: MP4 placeholder generation
+- **Real TTS Providers** (src/generation/kokoro.py, chatterbox.py, qwen_tts.py)
+  - KokoroProvider: Kokoro-82M (default; lazy-loaded, CPU-skip on no CUDA)
+  - ChatterboxProvider: Voice-cloning TTS (instruct/mimic modes)
+  - QwenTTSProvider: Qwen3-TTS (voice-key-driven)
+  - TTSProvider interface (src/generation/tts_adapter.py): meta/properties/`supported`
+  - MockTTSProvider: Silent WAV fallback (non-strict mode only)
 
 - **Provider Factory** (src/generation/provider_factory.py)
   - Dynamic provider loading based on configuration
@@ -267,10 +273,10 @@ Outputs:
 
 ## What's Mocked (For Local Development)
 
-- **Script generation** (MockScriptProvider)
-- **TTS** (MockTTSProvider - silent WAV files)
-- **Image generation** (MockImageProvider - PNG placeholders)
-- **Video generation** (MockVideoProvider - MP4 placeholders)
+- **Script generation** (MockScriptProvider) — real Qwen writer used in strict/colab profiles
+- **TTS** (MockTTSProvider - silent WAV files) — real Kokoro/Chatterbox/Qwen3-TTS in colab profile; mock rejected when `REQUIRE_REAL_TTS=true`
+- **Image generation** (MockImageProvider - PNG placeholders) — real providers pending
+- **Video generation** (MockVideoProvider - MP4 placeholders) — real providers pending
 
 These mocks allow:
 - Full pipeline execution on weak laptops
@@ -303,13 +309,13 @@ providers:
   llm: qwen
   transcription: whisperx
   script: qwen
-  tts: mock
+  tts: kokoro
   image: mock
   video: mock
 ```
 
-- Real WhisperX, Qwen LLM, and Qwen script generation on GPU
-- Mock generation (to be replaced later)
+- Real WhisperX, Qwen LLM, Qwen script generation, and Kokoro TTS on GPU
+- Mock image/video generation (to be replaced later)
 - Requires CUDA/GPU
 - For actual AI execution and validation
 
@@ -327,14 +333,15 @@ providers:
 
 1. **Keyword-based ranking** - the base ranker is deterministic lexical scoring; evidence tags are now used by selection, but the base ranker still needs an LLM-aware pass
 2. **Small-model fidelity** - Qwen3-4B occasionally echoes prompt examples or produces loose JSON; guarded by placeholder detection, retry, and a plain-text fallback, but a 7B+ model would be more reliable
-3. **Mock generation providers** - real TTS/image/video integration deferred
-4. **No human feedback loop** - one-shot generation only
-5. **No cost tracking** - no visibility into token usage
+3. **TTS emotion is approximated** - Kokoro maps tone/emotion to fixed-personality voices and pace/energy to speed; Chatterbox/Qwen3-TTS report emotion/pace as unsupported in the released packages. True expressive control is not yet available
+4. **Real TTS requires GPU** - providers skip CPU synthesis by design (`cpu_skipped`); a CUDA box is required for the benchmark/pipeline runs
+5. **No human feedback loop** - one-shot generation only
+6. **No cost tracking** - no visibility into token usage
 
 ## Test Commands
 
 ```bash
-# Local development (all fast tests, ~15 seconds)
+# Local development (all fast tests, ~50 seconds)
 pytest
 
 # Real-model tests (WhisperX/Qwen/E2E) are skipped by default.
@@ -405,10 +412,21 @@ python src/main.py run --project-id <id>
   - Notebook guards against stale kernels (re-imports from disk if the loaded
     `qwen.py` is pre-fix) and against reusing a stale validation clip
 
-### 5. TTS Integration
-- Implement Kokoro or Qwen3-TTS provider
-- Replace mock with real synthesis
-- Add voice/emotion parameters
+### 5. TTS Integration ✅ (Real TTS + Cinematic Audio Mix)
+- ✅ Real open-source TTS providers behind one `TTSProvider` interface:
+  `src/generation/kokoro.py` (Kokoro-82M, default), `src/generation/chatterbox.py`
+  (voice cloning), `src/generation/qwen_tts.py` (Qwen3-TTS)
+- ✅ Provider factory + `available_tts_providers()`; switched via `TTS_PROVIDER` or profiles
+- ✅ Strict production mode `REQUIRE_REAL_TTS=true` refuses mock/pyttsx3 audio
+- ✅ Director-controlled narration properties (tone/emotion/pace/energy/intensity)
+  → `script.json["narration_properties"]`, honored per provider capability
+- ✅ TTS benchmark: same narration across providers → `reports/tts_benchmark.json`
+  (model/device/gen-time/duration/sample-rate/status; `cpu_skipped` when no CUDA)
+- ✅ Audio pipeline: film ducking (sidechaincompress), music ducking, EBU R128
+  loudnorm, true-peak `alimiter` (no clipping), burned subtitles (SRT/libass)
+- ✅ GPU notebook `notebooks/colab_real_movie_tts.ipynb` (real movie + real TTS)
+  + `scripts/colab_tts_setup.sh`
+- ⏳ Real-TTS GPU run on a user-supplied movie (pending)
 
 ### 6. Image/Video Generation
 - Add ComfyUI provider
@@ -472,33 +490,47 @@ grep -A 20 "profiles:" configs/profiles.yaml
 ## Test Results
 
 ```
-86 fast tests ............................. PASS
+112 fast tests ............................ PASS
   - 26 Qwen provider tests (incl. placeholder-guard + plain-text fallback)
   - 10 Creative director tests
   - 17 Strict-mode + Qwen script writer tests
   - 5 Multi-scene selection tests
-  - Multi-clip rendering test (FFmpeg)
+  - 12 Real-TTS provider unit tests (no model loading; find_spec availability)
+  - 5 TTS strict-mode (REQUIRE_REAL_TTS) tests
+  - 3 TTS adapter tests (meta + narration props + strict rejection)
+  - 2 TTS benchmark tests (mock baseline + unavailable-provider reporting)
+  - 5 Audio-mix render-command tests (ducking/loudnorm/limiter/srt/silent clips)
+  - Multi-clip rendering test (FFmpeg) — now with film ducking + subtitles
   - Existing ranking / selection / extraction / timeline tests
-2 skipped (env-gated real-model tests)
-8 deselected (slow / llm_integration)
+2 skipped (real-TTS GPU tests — gated behind STUDIO_RUN_REAL_TESTS=1 + CUDA)
+11 deselected (slow / llm_integration)
 ─────────────────────────────────────────
-TOTAL: 86 passing, 0 failures, ~14s runtime
+TOTAL: 112 passing, 0 failures, ~50s runtime
 ```
 
 ## Status for Handoff
 
 ✅ **Architecture**: Complete and validated
 ✅ **Local Development**: Ready on weak laptops
-✅ **Testing**: Comprehensive, fast (86 passing)
+✅ **Testing**: Comprehensive, fast (112 passing, ~50s)
 ✅ **Multi-Scene Cut**: Selection, extraction, timeline, render, and QC wired end-to-end
 ✅ **Typed Evidence Selection**: Director-driven evidence typing used by selection
 ✅ **Real Script Provider**: Qwen narration writer integrated into the orchestrator
 ✅ **Strict GPU Mode**: Hard-fail validation with provider manifest; doctor reporting
-✅ **Colab GPU Validation**: PASSED on a real T4 with Qwen/Qwen3-4B-Instruct-2507
+✅ **Strict Real-TTS Mode**: `REQUIRE_REAL_TTS=true` refuses mock audio; doctor reports `tts_ok`
+✅ **Real TTS Providers**: Kokoro (default), Chatterbox, Qwen3-TTS behind one interface;
+   lazy-loaded, shared class-level model cache, per-provider `supported` reporting
+✅ **Narration Properties**: tone/emotion/pace/energy/intensity in `script.json`, applied per provider
+✅ **TTS Benchmark**: `benchmark-tts` CLI + `RUN_TTS_BENCHMARK=true` hook → `tts_benchmark.json`
+✅ **Cinematic Audio Mix**: film + music ducking, loudnorm, true-peak limiter, burned subtitles
+✅ **Local E2E Render Validated**: mock-profile run produced a playable 29.6s MP4
+   (H.264 1280x720 + AAC, subtitles burned, `no_clipping: true`, peak −2.9 dB)
+✅ **Colab GPU Validation (LLM)**: PASSED on a real T4 with Qwen/Qwen3-4B-Instruct-2507
    (real concepts + narration, no OOM, no placeholder echo)
-✅ **Documentation**: Profiles, provider system, configuration, Colab flow
-✅ **Timeline Rendering**: Local FFmpeg rendering integrated and validated
-⏳ **Real TTS/Image/Video**: Mocks complete, integration pending
+✅ **Documentation**: Profiles, provider system, configuration, Colab flow, TTS
+⏳ **Real-Movie + Real-TTS GPU run**: notebook `colab_real_movie_tts.ipynb` ready;
+   needs a user-supplied legally-owned movie to execute on a T4/A100
+⏳ **Image/Video Generation**: Mocks complete, integration pending
 
 ## Continuation Instructions
 
@@ -518,4 +550,8 @@ To continue:
 6. Test on Colab
 7. Update this status document
 
-No blockers. Colab GPU validation passed; next features are TTS/image/video integration.
+No blockers. Real TTS providers + cinematic audio pipeline are implemented and
+tested; the remaining proof is executing `notebooks/colab_real_movie_tts.ipynb`
+on a GPU with a user-supplied movie, then evaluating several real videos before
+deciding the next milestone (semantic understanding / director intelligence /
+script quality / scene retrieval / TTS-emotion / montage / image gen / cloud video).

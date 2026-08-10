@@ -47,7 +47,11 @@ class ScriptProvider(ABC):
 
 class TTSProvider(ABC):
     """Interface for text-to-speech generation."""
-    
+
+    # Provider identifier (e.g. "kokoro", "chatterbox", "qwen3_tts"). Real
+    # providers override this; the mock stays "mock".
+    name: str = "unknown"
+
     @abstractmethod
     def synthesize(
         self,
@@ -58,10 +62,11 @@ class TTSProvider(ABC):
         speaking_rate: float = 1.0,
         pitch: float = 1.0,
         output_path: Optional[Path] = None,
+        narration: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Synthesize speech from text.
-        
+
         Args:
             text: Text to synthesize
             voice: Voice/speaker identifier
@@ -70,13 +75,21 @@ class TTSProvider(ABC):
             speaking_rate: Speech speed multiplier
             pitch: Pitch adjustment
             output_path: Path to save audio file
-        
+            narration: Director-controlled delivery properties
+                (tone, emotion, pace, energy, dramatic_intensity). Providers
+                honor the subset their model supports.
+
         Returns:
             Dictionary with:
             {
                 "audio_path": Path,
                 "duration_sec": float,
-                "sample_rate": int
+                "sample_rate": int,
+                "provider": str,
+                "model": str,
+                "device": str,
+                "generation_time_sec": float,
+                "supported": {"emotion": bool, "pace": bool, ...}
             }
         """
         pass

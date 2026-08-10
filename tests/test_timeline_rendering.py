@@ -15,7 +15,10 @@ def _make_video(path: Path, duration: float = 1.5):
         [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-f", "lavfi", "-i", f"testsrc=size=320x240:rate=24:duration={duration}",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path),
+            "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
+            "-shortest",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", str(path),
         ],
         check=True,
     )
@@ -85,6 +88,11 @@ def test_pipeline_artifacts_produce_valid_render(tmp_path: Path):
     assert float(probe.stdout.strip()) > 0
     render_job = json.loads((project / "renders" / "render_job.json").read_text())
     assert render_job["status"] == "done"
+    assert render_job["audio_mix"]["no_clipping"] is True
+    assert render_job["audio_mix"]["film_ducking"] == "sidechaincompress threshold=0.05 ratio=8"
+    # subtitles burned into the render when libass is present
+    if (project / "renders" / "subtitles.srt").exists():
+        assert render_job["subtitles"], "subtitle track should be recorded"
 
 
 @pytest.mark.skipif(
@@ -159,3 +167,5 @@ def test_multi_clip_pipeline_artifacts_produce_valid_render(tmp_path: Path):
     render_job = json.loads((project / "renders" / "render_job.json").read_text())
     assert render_job["status"] == "done"
     assert len(render_job["timeline"]) == 2
+    assert render_job["audio_mix"]["no_clipping"] is True
+    assert render_job["audio_mix"]["normalization"]

@@ -1,12 +1,62 @@
-"""TTS adapter for the local profile.
+"""TTS adapter: synthesize the project's narration through a configured provider.
 
-The local profile uses the deterministic mock TTS provider.  Unlike the old
-stub, it writes a valid WAV whose duration is derived from the generated
-script, so FFmpeg can consume it during assembly.
+Resolution order for the provider config:
+1. Environment overrides (TTS_PROVIDER, TTS_VOICE, TTS_DEVICE, ...)
+2. ``configs/app.yaml`` -> ``tts`` block
+3. Fallback: mock provider (unless REQUIRE_REAL_TTS=true, which refuses mock audio)
+
+The selected provider is also recorded in ``audio/tts_meta.json`` together with
+the model, device, generation time, duration, sample rate, and the narration
+properties actually applied, so the benchmark/QC stages can audit it.
 """
 import json
+import os
+import time
 from pathlib import Path
-from generation.mock import MockTTSProvider
+from typing import Optional
+
+from utils.strict import require_real_tts, tts_strict_mode_enabled
+
+
+def _load_yaml():
+    try:
+        import yaml
+    except Exception:
+        return {}
+    for path in ("configs/app.yaml", "configs/profiles.yaml"):
+        p = Path(__file__).resolve().parent.parent.parent / path
+        if p.exists():
+            try:
+                return yaml.safe_load(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+    return {}
+
+
+def _tts_config() -> dict:
+    config = _load_yaml()
+    tts = {}
+    for section in ("app", "profiles"):
+        if section in config and isinstance(config[section], dict):
+            tts = config[section].get("tts", tts)
+    # env overrides on top
+    tts = dict(tts)
+    tts["provider"] = os.getenv("TTS_PROVIDER", tts.get("provider", "mock"))
+    tts["voice"] = os.getenv("TTS_VOICE", tts.get("voice", "default"))
+    tts["language"] = os.getenv("TTS_LANGUAGE", tts.get("language", "en"))
+    tts["device"] = os.getenv("TTS_DEVICE", tts.get("device", "auto"))
+    return tts
+
+
+def load_tts_provider(config: Optional[dict] = None) -> object:
+    """Build the TTS provider for the active config, honoring strict mode."""
+    from generation.provider_factory import get_tts_provider
+
+    config = config or _tts_config()
+    provider = get_tts_provider(config)
+    if tts_strict_mode_enabled():
+        provider = require_real_tts(provider, "TTS")
+    return provider
 
 
 def synthesize_voice(project_dir: Path, script_path: str = None):
@@ -19,19 +69,47 @@ def synthesize_voice(project_dir: Path, script_path: str = None):
     if not text:
         raise ValueError("Script contains no voiceover_text")
 
-    out_dir = Path(project_dir) / 'audio'
+    config = _tts_config()
+    provider = load_tts_provider(config)
+
+    out_dir = project_dir / 'audio'
     out_dir.mkdir(parents=True, exist_ok=True)
     voice_path = out_dir / 'voice.wav'
-    result = MockTTSProvider().synthesize(text, output_path=voice_path)
+
+    narration = script.get("narration_properties") or {}
+    from script.narration import finalize_narration_properties
+
+    narration = finalize_narration_properties(narration)
+
+    t0 = time.monotonic()
+    result = provider.synthesize(
+        text,
+        voice=config.get("voice", "default"),
+        language=config.get("language", "en"),
+        emotion=narration.get("emotion", "neutral"),
+        speaking_rate=float(narration.get("pace", 1.0)),
+        pitch=1.0,
+        output_path=voice_path,
+        narration=narration,
+    )
+    generation_time = time.monotonic() - t0
+
     meta = {
         "voice_path": str(voice_path),
-        "voice_model": "mock",
-        "duration_sec": result["duration_sec"],
-        "sample_rate": result["sample_rate"],
+        "voice_provider": result.get("provider", getattr(provider, "name", "unknown")),
+        "voice_model": result.get("model", "unknown"),
+        "voice_device": result.get("device", "unknown"),
+        "generation_time_sec": round(generation_time, 3),
+        "duration_sec": result.get("duration_sec"),
+        "sample_rate": result.get("sample_rate"),
+        "voice": result.get("voice"),
+        "supported": result.get("supported", {}),
+        "narration_properties": narration,
+        "mock": bool(result.get("mock", False)),
         "text": text,
     }
     meta_path = out_dir / 'tts_meta.json'
     with meta_path.open('w', encoding='utf-8') as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
-    print(f"Synthesized voice -> {voice_path}")
+    print(f"Synthesized voice -> {voice_path} ({meta['voice_provider']})")
     return voice_path

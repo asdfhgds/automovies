@@ -1,6 +1,57 @@
-"""Quality control stub: perform basic checks on produced artifacts."""
+"""Quality control: perform basic checks on produced artifacts.
+
+Adds audio-grade checks on top of the artifact checks:
+
+- render exists, non-empty, and has a playable duration (ffprobe)
+- the render carries an audio stream
+- the narration was produced by a real TTS provider (from tts_meta.json)
+- the audio does not clip (volumedetect max_volume <= 0 dBFS)
+- the TTS benchmark report exists when it was requested
+"""
 import json
+import subprocess
 from pathlib import Path
+
+
+def _ffprobe_json(path: Path):
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration,size",
+            "-show_entries", "stream=index,codec_type,codec_name",
+            "-of", "json",
+            str(path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout)
+    except Exception:
+        return None
+
+
+def _max_volume_db(path: Path):
+    """Return the max_volume in dBFS for the first audio stream (None on failure)."""
+    result = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-i", str(path),
+            "-af", "volumedetect", "-f", "null", "-",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    for line in (result.stderr or "").splitlines():
+        if "max_volume" in line:
+            try:
+                return float(line.split("max_volume:")[1].split(" dB")[0])
+            except Exception:
+                return None
+    return None
 
 
 def run_qc(project_dir: Path):
@@ -31,7 +82,57 @@ def run_qc(project_dir: Path):
         checks['selected_scenes'] = False
         checks['scene_clips'] = False
 
-    report = {'project': str(project_dir.name), 'checks': checks}
+    # --- render probe (playability) ---
+    render = project_dir / 'renders' / 'final_render.mp4'
+    checks['render_duration_sec'] = None
+    checks['render_has_video'] = False
+    checks['render_has_audio'] = False
+    if render.exists() and render.stat().st_size > 0:
+        probe = _ffprobe_json(render)
+        if probe:
+            try:
+                checks['render_duration_sec'] = round(float(probe.get('format', {}).get('duration', 0)), 3)
+            except (TypeError, ValueError):
+                checks['render_duration_sec'] = None
+            streams = probe.get('streams', [])
+            checks['render_has_video'] = any(s.get('codec_type') == 'video' for s in streams)
+            checks['render_has_audio'] = any(s.get('codec_type') == 'audio' for s in streams)
+        checks['render_non_empty'] = True
+    else:
+        checks['render_non_empty'] = False
+
+    # --- audio quality: real TTS + no clipping ---
+    tts_meta_path = project_dir / 'audio' / 'tts_meta.json'
+    if tts_meta_path.exists():
+        meta = json.loads(tts_meta_path.read_text(encoding='utf-8'))
+        checks['narration_real_tts'] = bool(not meta.get('mock', True))
+        checks['narration_provider'] = meta.get('voice_provider')
+        checks['narration_model'] = meta.get('voice_model')
+        checks['narration_device'] = meta.get('voice_device')
+        checks['narration_duration_sec'] = meta.get('duration_sec')
+        checks['narration_sample_rate'] = meta.get('sample_rate')
+    else:
+        checks['narration_real_tts'] = False
+        checks['narration_provider'] = None
+
+    if render.exists() and render.stat().st_size > 0:
+        peak = _max_volume_db(render)
+        checks['render_max_volume_db'] = peak
+        checks['no_clipping'] = peak is not None and peak <= 0.0
+    else:
+        checks['render_max_volume_db'] = None
+        checks['no_clipping'] = False
+
+    checks['tts_benchmark'] = (project_dir / 'reports' / 'tts_benchmark.json').exists()
+
+    report = {
+        'project': str(project_dir.name),
+        'checks': checks,
+        'passed': all(
+            v is True for k, v in checks.items()
+            if k.startswith(('director', 'script', 'scene', 'assets', 'render', 'selected', 'narration_real_tts', 'no_clipping', 'tts_benchmark'))
+        ),
+    }
     out = project_dir / 'reports'
     out.mkdir(parents=True, exist_ok=True)
     with (out / 'qc_report.json').open('w', encoding='utf-8') as f:

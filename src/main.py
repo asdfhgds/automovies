@@ -29,6 +29,44 @@ def init_project(args):
     return project_id
 
 
+def benchmark_tts(args):
+    """Benchmark every available TTS provider on a shared narration text."""
+    import json as _json
+
+    from generation.tts_benchmark import benchmark_tts
+
+    text = args.text or (
+        "Welcome to this deep dive. Every frame we are about to examine was "
+        "chosen for a reason. Let us look closer at what the director is "
+        "actually doing, and why it matters."
+    )
+    narration = {}
+    if getattr(args, 'emotion', None):
+        narration['emotion'] = args.emotion
+    if getattr(args, 'pace', None):
+        narration['pace'] = float(args.pace)
+    if getattr(args, 'tone', None):
+        narration['tone'] = args.tone
+    report = benchmark_tts(
+        text=text,
+        output_dir=Path(args.output_dir),
+        include_mock=True,
+        narration=narration or None,
+    )
+    for entry in report['results']:
+        status = entry['status']
+        line = (
+            f"  [{status:>10}] {entry['provider']:<12} "
+            f"model={entry['model']} device={entry['device']} "
+            f"gen={entry['generation_time_sec']}s dur={entry['duration_sec']}s "
+            f"sr={entry['sample_rate']}"
+        )
+        if entry.get('error'):
+            line += f" error={entry['error']}"
+        print(line)
+    return 0
+
+
 def run(args):
     project_id = args.project_id
     if not project_id:
@@ -62,6 +100,13 @@ def main():
     p_run = sub.add_parser('run', help='Run pipeline for a project')
     p_run.add_argument('--project-id', help='Existing project id')
 
+    p_bench = sub.add_parser('benchmark-tts', help='Benchmark available TTS providers on a shared narration')
+    p_bench.add_argument('--text', help='Narration text to synthesize')
+    p_bench.add_argument('--tone', help='Tone (analytical, dramatic, ...)')
+    p_bench.add_argument('--emotion', help='Emotion override')
+    p_bench.add_argument('--pace', help='Pace multiplier override')
+    p_bench.add_argument('--output-dir', default='reports', help='Output directory for wavs + report')
+
     p_doctor = sub.add_parser('doctor', help='Run environment health checks')
 
     args = parser.parse_args()
@@ -69,6 +114,8 @@ def main():
         init_project(args)
     elif args.cmd == 'run':
         run(args)
+    elif args.cmd == 'benchmark-tts':
+        benchmark_tts(args)
     elif args.cmd == 'doctor':
         # lightweight import of doctor checks
         from utils.doctor import print_report

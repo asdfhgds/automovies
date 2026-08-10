@@ -99,6 +99,10 @@ def generate_script(project_dir: Path):
     meta_path = project_dir / "project_meta.json"
     if meta_path.exists():
         project_id = json.loads(meta_path.read_text(encoding="utf-8")).get("project_id", project_id)
+
+    from script.narration import narration_properties_from_env
+
+    narration_props = narration_properties_from_env(plan)
     script = {
         "project_id": project_id or project_dir.name,
         "voiceover_text": voiceover,
@@ -106,6 +110,7 @@ def generate_script(project_dir: Path):
         "cta": "Subscribe for more",
         "style_notes": f"{plan.get('tone', 'analytical')} commentary with a concise, cinematic pace",
         "scene_ids": [s["scene_id"] for s in selected],
+        "narration_properties": narration_props,
     }
     out_path = out_dir / 'script.json'
     with out_path.open('w', encoding='utf-8') as f:

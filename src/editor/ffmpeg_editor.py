@@ -1,8 +1,15 @@
-"""Timeline-backed FFmpeg renderer for the local MVP profile.
+"""Timeline-backed FFmpeg renderer for the MVP profile.
 
 Supports a multi-scene cut: every selected scene clip is concatenated in
 selection order, scaled to the export resolution, and mixed with the generated
-voiceover. Subtitles from the script are recorded in the timeline (not burned).
+voiceover. The audio pipeline now provides:
+
+- real narration mixed over the selected movie clips (film audio preserved),
+- basic movie-audio ducking (sidechain compressor keyed on the narration),
+- music ducking when an ``assets/music/*`` file is present,
+- loudness normalization (EBU R128) and a final true-peak limiter,
+- burned subtitles from the script (SRT rendered via the ``subtitles`` filter)
+  when the local ffmpeg has libass.
 """
 import json
 import shutil
@@ -12,20 +19,57 @@ from typing import Dict, Any, Optional
 
 from editing.timeline import TimelineBuilder, TrackType
 
+EXPORT_WIDTH = 1280
+EXPORT_HEIGHT = 720
+EXPORT_FPS = 30
+AUDIO_SR = 44100
 
-def _probe_duration(path: Path) -> float:
+
+# --------------------------------------------------------------------------
+# ffprobe helpers
+# --------------------------------------------------------------------------
+
+def _probe(path: Path) -> Dict[str, Any]:
     result = subprocess.run(
         [
             "ffprobe", "-v", "error",
             "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-show_entries", "stream=index,codec_type",
+            "-of", "json",
             str(path),
         ],
         check=True,
         capture_output=True,
         text=True,
     )
-    return max(0.1, float(result.stdout.strip()))
+    data = json.loads(result.stdout)
+    duration = 0.0
+    try:
+        duration = float(data.get("format", {}).get("duration") or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    streams = data.get("streams", [])
+    has_video = any(s.get("codec_type") == "video" for s in streams)
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
+    return {"duration_sec": max(0.0, duration), "video": has_video, "audio": has_audio}
+
+
+def _probe_duration(path: Path) -> float:
+    return max(0.1, _probe(path).get("duration_sec", 0.0))
+
+
+def _probe_has_audio(path: Path) -> bool:
+    return _probe(path).get("audio", False)
+
+
+def _find_music(project_dir: Path) -> Optional[Path]:
+    music_dir = project_dir / "assets" / "music"
+    if not music_dir.exists():
+        return None
+    for ext in ("*.mp3", "*.wav", "*.m4a", "*.aac", "*.ogg", "*.flac"):
+        for f in sorted(music_dir.glob(ext)):
+            return f
+    return None
 
 
 def _selected_clips(project_dir: Path) -> list:
@@ -56,6 +100,10 @@ def _selected_clips(project_dir: Path) -> list:
             clips.append((scene, clip))
     return clips
 
+
+# --------------------------------------------------------------------------
+# Timeline
+# --------------------------------------------------------------------------
 
 def build_timeline(project_dir: Path):
     """Build and persist a timeline from the selected clips and voiceover."""
@@ -102,10 +150,222 @@ def build_timeline(project_dir: Path):
     return timeline, timeline_path
 
 
-def _render_job(project_dir: Path, timeline, output_path: Path) -> Dict[str, Any]:
+def _build_srt(timeline, srt_path: Path) -> Path:
+    """Write an SRT file from the timeline's subtitle (TEXT) track."""
+    text_track = timeline.get_track(TrackType.TEXT)
+    if not text_track or not text_track.items:
+        raise ValueError("Timeline has no subtitle track")
+
+    def _ts(sec: float) -> str:
+        ms = int(round(sec * 1000))
+        h, rem = divmod(ms, 3600000)
+        m, rem = divmod(rem, 60000)
+        s, mss = divmod(rem, 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{mss:03d}"
+
+    lines = []
+    for i, item in enumerate(text_track.items, start=1):
+        start = max(0.0, item.start_sec)
+        end = start + max(0.1, item.duration_sec)
+        text = (item.content_text or "").strip()
+        if not text:
+            continue
+        lines.append(f"{i}\n{_ts(start)} --> {_ts(end)}\n{text}\n")
+    if not lines:
+        raise ValueError("Subtitle track contains no usable text")
+    srt_path.parent.mkdir(parents=True, exist_ok=True)
+    srt_path.write_text("\n".join(lines), encoding="utf-8")
+    return srt_path
+
+
+def _escape_srt_path(path: Path) -> str:
+    s = str(path)
+    s = s.replace("\\", "/")
+    s = s.replace(":", "\\:")
+    s = s.replace("'", "\\'")
+    return s
+
+
+def _burn_subtitles_supported() -> bool:
+    if shutil.which("ffmpeg") is None:
+        return False
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True
+        )
+        return "subtitles" in out.stdout or "subtitles" in out.stderr
+    except Exception:
+        return False
+
+
+# --------------------------------------------------------------------------
+# Render command builder (unit-testable without running ffmpeg)
+# --------------------------------------------------------------------------
+
+def build_render_command(
+    clip_paths: list,
+    voice_path: Path,
+    output_path: Path,
+    srt_path: Optional[Path] = None,
+    music_path: Optional[Path] = None,
+    width: int = EXPORT_WIDTH,
+    height: int = EXPORT_HEIGHT,
+    fps: int = EXPORT_FPS,
+    audio_sr: int = AUDIO_SR,
+) -> Dict[str, Any]:
+    """Build the ffmpeg command for the full audio-mixed render.
+
+    Returns a dict with the prepared ``command`` list plus metadata so callers
+    and tests can inspect the audio pipeline.
+    """
+    clips = [Path(c) for c in clip_paths]
+    voice = Path(voice_path)
+    output = Path(output_path)
+    if not clips:
+        raise ValueError("No scene clips to render")
+    if not voice.exists():
+        raise FileNotFoundError(f"Voiceover audio not found: {voice}")
+
+    voice_duration = _probe_duration(voice)
+    clip_durations = [_probe_duration(c) for c in clips]
+    video_total = sum(clip_durations)
+    total_duration = max(video_total, voice_duration)
+    pad = max(0.0, total_duration - video_total)
+
+    # Inputs
+    inputs = []
+    input_count = 0
+    for clip in clips:
+        inputs += ["-i", str(clip)]
+        input_count += 1
+    inputs += ["-i", str(voice)]
+    voice_index = input_count
+    input_count += 1
+    music_index = None
+    if music_path is not None:
+        inputs += ["-i", str(music_path)]
+        music_index = input_count
+        input_count += 1
+
+    audio_clip_indices = [i for i, c in enumerate(clips) if _probe_has_audio(c)]
+    silence_index = None
+    if not audio_clip_indices:
+        inputs += [
+            "-f", "lavfi",
+            "-t", f"{video_total:.3f}",
+            "-i", f"anullsrc=channel_layout=stereo:sample_rate={audio_sr}",
+        ]
+        silence_index = input_count
+        input_count += 1
+
+    chains = []
+
+    # --- video chain ---
+    for i in range(len(clips)):
+        chains.append(
+            f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
+        )
+    concat_in = "".join(f"[v{i}]" for i in range(len(clips)))
+    chains.append(f"{concat_in}concat=n={len(clips)}:v=1:a=0[vc]")
+
+    video_label = "[vc]"
+    if pad > 0.001:
+        chains.append(f"[vc]tpad=stop_mode=clone:stop_duration={pad:.3f}[vt]")
+        video_label = "[vt]"
+
+    subtitle_label = video_label
+    if srt_path is not None and Path(srt_path).exists():
+        escaped = _escape_srt_path(srt_path)
+        chains.append(
+            f"{video_label}subtitles=filename='{escaped}'"
+            f":force_style='FontSize=18,MarginV=24'[vsub]"
+        )
+        subtitle_label = "[vsub]"
+
+    # --- film audio chain (movie dialogue/sound under narration) ---
+    if audio_clip_indices:
+        for i in audio_clip_indices:
+            chains.append(
+                f"[{i}:a]aresample={audio_sr},aformat=channel_layouts=stereo[af{i}]"
+            )
+        if len(audio_clip_indices) == 1:
+            i = audio_clip_indices[0]
+            chains.append(f"[af{i}]anull[film]")
+        else:
+            concat_a = "".join(f"[af{i}]" for i in audio_clip_indices)
+            chains.append(f"{concat_a}concat=n={len(audio_clip_indices)}:v=0:a=1[film]")
+    else:
+        chains.append(f"[{silence_index}:a]anull[film]")
+
+    # --- voice chain ---
+    chains.append(f"[{voice_index}:a:0]aresample={audio_sr},aformat=channel_layouts=stereo[voice]")
+
+    # Duck film audio under narration
+    chains.append(
+        f"[film][voice]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300[filmD]"
+    )
+
+    mix_inputs = "[filmD][voice]"
+    num_mix = 2
+    music_used = False
+    if music_path is not None:
+        chains.append(
+            f"[{music_index}:a:0]aresample={audio_sr},aformat=channel_layouts=stereo,"
+            f"volume=0.25[mus]"
+        )
+        chains.append(
+            f"[mus][voice]sidechaincompress=threshold=0.05:ratio=10:attack=50:release=400[musD]"
+        )
+        mix_inputs += "[musD]"
+        num_mix = 3
+        music_used = True
+
+    # --- mix + normalize + limiter (no clipping) ---
+    chains.append(
+        f"{mix_inputs}amix=inputs={num_mix}:duration=longest:normalize=0[mix]"
+    )
+    chains.append(
+        f"[mix]loudnorm=I=-16:TP=-1.5:LRA=11:print_format=summary,"
+        f"alimiter=limit=0.95[aout]"
+    )
+
+    filter_complex = ";".join(chains)
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        *inputs,
+        "-filter_complex", filter_complex,
+        "-map", subtitle_label, "-map", "[aout]",
+        "-t", f"{total_duration:.3f}",
+        "-r", str(fps),
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", str(audio_sr),
+        str(output),
+    ]
+    return {
+        "command": command,
+        "filter_complex": filter_complex,
+        "inputs": inputs,
+        "total_duration_sec": total_duration,
+        "video_total_sec": video_total,
+        "pad_sec": pad,
+        "subtitle_burned": subtitle_label == "[vsub]",
+        "music_used": music_used,
+        "ducking": True,
+        "normalization": "loudnorm=-16LUFS+alimiter-0.95",
+        "output_path": str(output),
+    }
+
+
+# --------------------------------------------------------------------------
+# Render job metadata
+# --------------------------------------------------------------------------
+
+def _render_job(project_dir: Path, timeline, output_path: Path, render_info: Dict[str, Any]) -> Dict[str, Any]:
     video_track = timeline.get_track(TrackType.VIDEO)
     voice_track = timeline.get_track(TrackType.VOICE)
     voice = voice_track.items[0].content_path if voice_track and voice_track.items else None
+    text_track = timeline.get_track(TrackType.TEXT)
     return {
         "project_id": project_dir.name,
         "timeline": [
@@ -117,19 +377,37 @@ def _render_job(project_dir: Path, timeline, output_path: Path) -> Dict[str, Any
             }
             for item in video_track.items
         ],
+        "subtitles": [
+            {
+                "start_sec": item.start_sec,
+                "end_sec": item.end_sec,
+                "text": item.content_text,
+            }
+            for item in text_track.items
+        ] if text_track else [],
         "audio_mix": {
             "voice_path": str(voice),
             "voice_gain_db": 0,
-            "music_gain_db": 0,
+            "film_ducking": "sidechaincompress threshold=0.05 ratio=8",
+            "music_path": render_info.get("music_path"),
+            "music_gain_db": None,
+            "music_ducking": render_info.get("music_used", False),
+            "normalization": render_info.get("normalization"),
+            "no_clipping": True,
         },
         "export": {
             "format": "mp4",
-            "resolution": "1280x720",
-            "fps": 30,
+            "resolution": f"{EXPORT_WIDTH}x{EXPORT_HEIGHT}",
+            "fps": EXPORT_FPS,
+            "audio_sample_rate": AUDIO_SR,
             "output_path": str(output_path),
         },
     }
 
+
+# --------------------------------------------------------------------------
+# Assembly entry point
+# --------------------------------------------------------------------------
 
 def assemble(project_dir: Path):
     """Render a valid MP4 from the selected clips and generated voiceover."""
@@ -153,42 +431,38 @@ def assemble(project_dir: Path):
         raise ValueError("Timeline has no voiceover")
     clips = [item.content_path for item in video_track.items]
     voice = voice_track.items[0].content_path
-    duration = timeline.total_duration_sec
 
-    inputs = []
-    for clip in clips:
-        inputs += ["-i", str(clip)]
-    inputs += ["-i", str(voice)]
-    voice_index = len(clips)
+    music_path = _find_music(project_dir)
+    srt_path = None
+    burn = __import__("os").getenv("BURN_SUBTITLES", "true").lower() != "false"
+    if burn and _burn_subtitles_supported():
+        srt_path = renders_dir / "subtitles.srt"
+        try:
+            _build_srt(timeline, srt_path)
+        except Exception as e:
+            print(f"Subtitle build failed, continuing without subtitles: {e}")
+            srt_path = None
+    else:
+        print("Subtitles disabled (BURN_SUBTITLES=false or ffmpeg lacks libass)")
 
-    chains = []
-    for i in range(len(clips)):
-        chains.append(
-            f"[{i}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
-            f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
-        )
-    concat_in = "".join(f"[v{i}]" for i in range(len(clips)))
-    chains.append(f"{concat_in}concat=n={len(clips)}:v=1:a=0[v]")
-    filter_complex = ";".join(chains)
+    render_info = build_render_command(
+        clip_paths=clips,
+        voice_path=voice,
+        output_path=out_file,
+        srt_path=srt_path,
+        music_path=music_path,
+    )
+    render_info["music_path"] = str(music_path) if music_path else None
+    render_info["subtitle_path"] = str(srt_path) if srt_path else None
 
-    command = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        *inputs,
-        "-filter_complex", filter_complex,
-        "-map", "[v]", "-map", f"{voice_index}:a:0",
-        "-t", f"{duration:.3f}",
-        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-ar", "44100",
-        str(out_file),
-    ]
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(render_info["command"], check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"ffmpeg assembly failed: {exc.stderr.strip()}") from exc
     if not out_file.exists() or out_file.stat().st_size == 0:
         raise RuntimeError("ffmpeg did not produce a render")
 
-    job = _render_job(project_dir, timeline, out_file)
+    job = _render_job(project_dir, timeline, out_file, render_info)
     job["timeline_path"] = str(timeline_path)
     job["status"] = "done"
     (renders_dir / "render_job.json").write_text(

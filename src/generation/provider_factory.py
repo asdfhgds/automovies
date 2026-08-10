@@ -29,34 +29,64 @@ def get_script_provider(config: Dict[str, Any]) -> Optional[Any]:
 
 
 def get_tts_provider(config: Dict[str, Any]) -> Optional[Any]:
-    """Get TTS provider based on configuration."""
+    """Get TTS provider based on configuration.
+
+    Honors ``REQUIRE_REAL_TTS=true``: when strict production TTS mode is on, a
+    mock provider or a failed real-provider load raises instead of silently
+    falling back, so a real-movie run can never produce mock audio by accident.
+    """
     provider_type = os.environ.get("TTS_PROVIDER", config.get("provider", "mock")).lower()
-    
+    strict = os.getenv("REQUIRE_REAL_TTS", "false").lower() == "true"
+
+    def _mock(message: str):
+        if strict:
+            raise RuntimeError(
+                f"REQUIRE_REAL_TTS=true but TTS_PROVIDER={provider_type!r} cannot run: {message}"
+            )
+        logger.warning(message)
+        from .mock import MockTTSProvider
+        return MockTTSProvider()
+
+    real_map = {
+        "kokoro": ("kokoro", "KokoroTTSProvider"),
+        "chatterbox": ("chatterbox", "ChatterboxTTSProvider"),
+        "qwen3_tts": ("qwen_tts", "Qwen3TTSProvider"),
+        "qwen3-tts": ("qwen_tts", "Qwen3TTSProvider"),
+    }
+
     try:
         if provider_type == "mock":
+            if strict:
+                raise RuntimeError(
+                    "REQUIRE_REAL_TTS=true but TTS_PROVIDER=mock. "
+                    "Production TTS refuses silent mock audio."
+                )
             from .mock import MockTTSProvider
             return MockTTSProvider()
-        elif provider_type == "kokoro":
+        if provider_type in real_map:
+            module_name, cls_name = real_map[provider_type]
             try:
-                from .kokoro import KokoroTTSProvider
-                return KokoroTTSProvider(config)
-            except ImportError:
-                logger.warning("Kokoro TTS not available, falling back to mock")
-                from .mock import MockTTSProvider
-                return MockTTSProvider()
-        elif provider_type in ["qwen3_tts", "qwen3-tts"]:
-            try:
-                from .qwen_tts import Qwen3TTSProvider
-                return Qwen3TTSProvider(config)
-            except ImportError:
-                logger.warning("Qwen3 TTS not available, falling back to mock")
-                from .mock import MockTTSProvider
-                return MockTTSProvider()
+                mod = __import__(f"generation.{module_name}", fromlist=[cls_name])
+                cls = getattr(mod, cls_name)
+                provider = cls(config)
+                if strict and not provider.is_available():
+                    raise RuntimeError(
+                        f"REQUIRE_REAL_TTS=true but {provider_type} is not installed."
+                    )
+                return provider
+            except ImportError as e:
+                return _mock(f"{provider_type} package not installed ({e})")
+            except RuntimeError as e:
+                raise RuntimeError(
+                    f"REQUIRE_REAL_TTS=true but {provider_type} failed: {e}"
+                ) from e
+            except Exception as e:
+                return _mock(f"{provider_type} failed to initialize: {e}")
         else:
-            logger.warning(f"Unknown TTS provider: {provider_type}, falling back to mock")
-            from .mock import MockTTSProvider
-            return MockTTSProvider()
+            return _mock(f"Unknown TTS provider: {provider_type}")
     except Exception as e:
+        if strict:
+            raise RuntimeError(f"TTS provider resolution failed: {e}") from e
         logger.error(f"Failed to load TTS provider {provider_type}: {e}, falling back to mock")
         try:
             from .mock import MockTTSProvider
@@ -64,6 +94,23 @@ def get_tts_provider(config: Dict[str, Any]) -> Optional[Any]:
         except Exception as e2:
             logger.error(f"Failed to load mock TTS provider: {e2}")
             return None
+
+
+def available_tts_providers() -> Dict[str, Any]:
+    """Return TTS provider availability for doctor/benchmark tooling."""
+    out = {}
+    for name, (module_name, cls_name) in {
+        "kokoro": ("kokoro", "KokoroTTSProvider"),
+        "chatterbox": ("chatterbox", "ChatterboxTTSProvider"),
+        "qwen3_tts": ("qwen_tts", "Qwen3TTSProvider"),
+    }.items():
+        try:
+            mod = __import__(f"generation.{module_name}", fromlist=[cls_name])
+            cls = getattr(mod, cls_name)
+            out[name] = {"available": bool(cls.is_available())}
+        except Exception as e:
+            out[name] = {"available": False, "error": str(e)}
+    return out
 
 
 def get_image_provider(config: Dict[str, Any]) -> Optional[Any]:

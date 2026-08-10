@@ -53,7 +53,9 @@ class MockScriptProvider(ScriptProvider):
 
 class MockTTSProvider(TTSProvider):
     """Mock TTS provider - creates silent audio placeholders."""
-    
+
+    name = "mock"
+
     def synthesize(
         self,
         text: str,
@@ -63,17 +65,21 @@ class MockTTSProvider(TTSProvider):
         speaking_rate: float = 1.0,
         pitch: float = 1.0,
         output_path: Optional[Path] = None,
+        narration: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Generate mock audio file."""
+        from .tts_common import NarrationProperties
+
+        props = NarrationProperties.from_dict(narration)
         if output_path is None:
             output_path = Path("mock_audio.wav")
-        
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Estimate duration: rough 150 words/minute = 2.5 words/second
         word_count = len(text.split())
-        duration_sec = max(1, word_count / 2.5) * (1 / speaking_rate)
+        duration_sec = max(1, word_count / 2.5) * (1 / (speaking_rate * props.pace))
         
         # Create a minimal WAV file header (silent audio)
         # WAV format: 44100 Hz, 16-bit mono, ~duration_sec seconds
@@ -110,6 +116,18 @@ class MockTTSProvider(TTSProvider):
             "sample_rate": sample_rate,
             "voice": voice,
             "language": language,
+            "provider": self.name,
+            "model": "mock",
+            "device": "cpu",
+            "generation_time_sec": 0.0,
+            "model_load_time_sec": 0.0,
+            "supported": {
+                "emotion": False,
+                "pace": True,
+                "pitch": False,
+                "energy": False,
+                "dramatic_intensity": False,
+            },
             "mock": True,
         }
 
