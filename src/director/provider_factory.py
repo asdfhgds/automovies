@@ -1,6 +1,7 @@
 """Factory for instantiating LLM providers based on configuration."""
 import os
 import logging
+from pathlib import Path
 from typing import Dict, Any, Optional
 
 from utils.strict import strict_mode_enabled, require_cuda
@@ -132,10 +133,24 @@ def get_director_config_from_env(app_config: Optional[Dict[str, Any]] = None) ->
     Returns:
         Director configuration dict
     """
-    # Start with app config
+    # Start with app config (load configs/app.yaml when not supplied)
     config = {}
     if app_config and "director" in app_config:
         config = app_config["director"].copy()
+    elif app_config is None:
+        try:
+            import yaml
+        except Exception:
+            yaml = None
+        if yaml is not None:
+            p = Path(__file__).resolve().parent.parent.parent / "configs" / "app.yaml"
+            if p.exists():
+                try:
+                    loaded = yaml.safe_load(p.read_text(encoding="utf-8"))
+                    if loaded and isinstance(loaded, dict) and "director" in loaded:
+                        config = loaded["director"].copy()
+                except Exception:
+                    pass
 
     # Environment overrides
     if os.getenv("DIRECTOR_PROVIDER"):

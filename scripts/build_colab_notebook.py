@@ -147,6 +147,8 @@ import os
 os.environ["STUDIO_PROFILE"] = "colab-gpu"
 os.environ["REQUIRE_REAL_LLM"] = "true"
 os.environ["REQUIRE_REAL_TTS"] = "true"
+os.environ["DIRECTOR_PROVIDER"] = "qwen"
+os.environ["DIRECTOR_MODEL"] = "Qwen/Qwen3-4B-Instruct-2507"
 os.environ["TTS_DEVICE"] = "cuda"
 os.environ["TTS_PROVIDER"] = "kokoro"  # kokoro | chatterbox | qwen3_tts
 os.environ["TTS_VOICE"] = "am_adam"
