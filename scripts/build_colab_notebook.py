@@ -103,15 +103,18 @@ print("MOVIE_PATH =", repr(MOVIE_PATH))
 
 cells.append(md("""### Cell 3 — Get + validate the movie
 Priority: if `MOVIE_URL` is set the movie is downloaded from the Google Drive
-share link with `gdown` (to a fixed path `/content/movie_download`), and then
-verified to actually be a video with `ffprobe` (a shared link that needs
-permissions, or a non-video file, fails loudly here instead of mid-pipeline).
+link with `gdown` (to a fixed path `/content/movie_download`), and then verified
+to actually be a video with `ffprobe`. Any Drive URL form works — share links
+(`/file/d/<id>/view`), `uc?id=` / `open?id=` / `drive.usercontent...` — the file
+id is extracted and normalized to the `uc?id=` form gdown handles reliably
+(including the large-file virus-scan confirm step). A link that needs
+permissions, or a non-video file, fails loudly here instead of mid-pipeline.
 Otherwise a `MOVIE_PATH` on the mounted Drive is used, and if that is also empty
 the notebook prompts you to upload a file. The movie is **never copied into the
 repo** — only its absolute path is registered in the project."""))
 
 cells.append(code("""# @title 3) Get + validate movie file
-import os, subprocess
+import os, re, subprocess
 from IPython.display import display, HTML
 
 MOVIE_PATH = open("/content/movie_path.txt").read().strip()
@@ -121,6 +124,14 @@ MOVIE_URL = open("/content/movie_url.txt").read().strip()
 if MOVIE_PATH.startswith("http"):
     MOVIE_URL = MOVIE_URL or MOVIE_PATH
     MOVIE_PATH = ""
+
+# Normalize any Drive URL to the uc?id= form gdown parses natively.
+if MOVIE_URL:
+    m = re.search(r"(?:file/d/|id=)([a-zA-Z0-9_-]{10,})", MOVIE_URL)
+    if m:
+        fid = m.group(1)
+        MOVIE_URL = f"https://drive.google.com/uc?id={fid}&export=download"
+        print("Using Drive file id:", fid)
 
 if MOVIE_URL and not MOVIE_PATH:
     try:
@@ -133,6 +144,15 @@ if MOVIE_URL and not MOVIE_PATH:
     saved = gdown.download(MOVIE_URL, output="/content/movie_download", quiet=False)
     assert saved and os.path.exists(saved), "gdown failed to download the movie"
     MOVIE_PATH = saved
+    size = os.path.getsize(MOVIE_PATH)
+    print(f"Downloaded {size/1e6:.1f} MB to {MOVIE_PATH}")
+    # A real movie is far larger than the HTML error/confirm page gdown may save
+    # when the link is not resolvable.
+    assert size > 1024 * 1024, (
+        f"Downloaded file is only {size} bytes - this is the error page, not the "
+        "movie. Make sure the Drive link points to a real video file shared as "
+        "'Anyone with the link'."
+    )
     open("/content/movie_path.txt", "w").write(MOVIE_PATH)
 
 if not MOVIE_PATH:
