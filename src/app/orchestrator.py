@@ -191,6 +191,16 @@ def start_pipeline(project_id: str):
     manifest['director_real_generation'] = director_real
     manifest['director_seconds'] = round(time.monotonic() - t0, 2)
 
+    # Free GPU memory between heavy stages. The Qwen model stays cached (class-level
+    # cache), so the script stage can reuse it when the model name matches and we
+    # don't load two 7B copies into a 16GB T4.
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
     # Phase: Script generation (Qwen when strict or configured, else deterministic)
     script_provider = 'deterministic'
     script_model = None
@@ -207,6 +217,15 @@ def start_pipeline(project_id: str):
             if strict and device in ('auto', 'cpu'):
                 require_cuda()
                 device = 'cuda'
+            # If the script wants a different model than the one cached from the
+            # director stage, drop the cache first to avoid holding both in VRAM.
+            if director_real and model != director_model:
+                try:
+                    from director.providers.qwen import QwenProvider
+                    QwenProvider.release_model()
+                    print(f"[SCRIPT] Dropping cached director model; loading {model}")
+                except Exception as e:
+                    print(f"[SCRIPT] Could not release director model: {e}")
             result = generate_script_qwen(project_dir, model=model, device=device)
             script_provider = 'qwen'
             script_model = result.get('script_model', model)

@@ -9,6 +9,23 @@ from .base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
+# Shared model cache keyed by (model_name, device, dtype, quantized).
+# The director and script stages each create a QwenProvider; without sharing,
+# both would load a full (~14GB fp16) copy of the model and OOM a 16GB T4.
+_MODEL_CACHE: Dict[Any, Any] = {}
+
+
+def _gpu_memory_gb() -> Optional[float]:
+    """Total VRAM in GB of the first CUDA device, or None if unavailable."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_properties(0).total_memory / 1e9
+    except Exception:
+        pass
+    return None
+
 
 class QwenProvider(LLMProvider):
     """Real LLM provider using Qwen models."""
@@ -62,6 +79,23 @@ class QwenProvider(LLMProvider):
         """Device actually used after initialization (None before load)."""
         return self._device_resolved
 
+    @classmethod
+    def release_model(cls) -> None:
+        """Drop the shared model cache and free GPU memory.
+
+        Call between stages when you know the next stage uses a *different*
+        model than the cached one (otherwise the cache is exactly what we want).
+        """
+        global _MODEL_CACHE
+        _MODEL_CACHE = {}
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     def _initialize(self) -> None:
         """Lazy initialization of model and tokenizer."""
         if self._initialized:
@@ -74,7 +108,6 @@ class QwenProvider(LLMProvider):
 
         try:
             import torch
-            from transformers import AutoTokenizer, AutoModelForCausalLM
 
             # Resolve device
             self._device_resolved = self._resolve_device()
@@ -87,8 +120,28 @@ class QwenProvider(LLMProvider):
                 "float32": torch.float32,
                 "bfloat16": torch.bfloat16,
             }
+            quantize_4bit = str(self.dtype).lower() in ("4bit", "int4", "nf4")
             torch_dtype = dtype_map.get(self.dtype, torch.float32)
-            logger.info(f"Using dtype: {torch_dtype}")
+            if quantize_4bit:
+                torch_dtype = torch.float16
+            logger.info(f"Using dtype: {torch_dtype} (4bit={quantize_4bit})")
+
+            # Cache check happens BEFORE importing transformers so a hit never
+            # pays for (or twice-loads) the model stack.
+            cache_key = (self.model_name, self._device_resolved, str(torch_dtype), quantize_4bit)
+            cached = _MODEL_CACHE.get(cache_key)
+            if cached:
+                self.model, self.tokenizer, cached_device = cached
+                self._device_resolved = cached_device
+                self._initialized = True
+                self.model_load_time_sec = 0.0
+                logger.info(
+                    f"Reused cached model {self.model_name} on {cached_device} "
+                    "(avoided a second full model load)"
+                )
+                return
+
+            from transformers import AutoTokenizer, AutoModelForCausalLM
 
             # Load tokenizer
             logger.info(f"Loading tokenizer from {self.model_name}...")
@@ -97,14 +150,52 @@ class QwenProvider(LLMProvider):
                 trust_remote_code=True,
             )
 
-            # Load model
-            logger.info(f"Loading model {self.model_name}...")
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
+            # Load model (memory-efficient: stream shards, keep headroom on GPU)
+            load_kwargs = dict(
                 torch_dtype=torch_dtype,
-                device_map=self._device_resolved,
                 trust_remote_code=True,
+                low_cpu_mem_usage=True,
             )
+
+            if quantize_4bit:
+                try:
+                    from transformers import BitsAndBytesConfig
+
+                    load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_use_double_quant=True,
+                    )
+                except ImportError:
+                    raise RuntimeError(
+                        "Qwen dtype='4bit' requires bitsandbytes. "
+                        "Install: pip install bitsandbytes"
+                    )
+
+            if self._device_resolved == "cuda":
+                # device_map="auto" lets accelerate decide placement and spool
+                # overflow to CPU instead of crashing with CUDA OOM.
+                load_kwargs["device_map"] = "auto"
+                mem_gb = _gpu_memory_gb()
+                if mem_gb:
+                    reserve = float(os.getenv("QWEN_VRAM_RESERVE_GB", "2.5"))
+                    gpu_gb = max(2.0, mem_gb - reserve)
+                    load_kwargs["max_memory"] = {0: f"{int(gpu_gb)}GiB"}
+                    logger.info(f"CUDA max_memory set to {load_kwargs['max_memory']}")
+                # Prefer memory-efficient SDPA attention (no flash-attn needed on T4).
+                load_kwargs["attn_implementation"] = "sdpa"
+            else:
+                load_kwargs["device_map"] = None
+
+            logger.info(f"Loading model {self.model_name}...")
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **load_kwargs)
+            except (ValueError, NotImplementedError, RuntimeError) as e:
+                # Some model configs reject explicit attn_implementation; retry with default.
+                logger.warning(f"sdpa attention rejected ({e}); retrying with default attention")
+                load_kwargs.pop("attn_implementation", None)
+                self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **load_kwargs)
 
             if self._device_resolved == "cuda":
                 try:
@@ -116,8 +207,10 @@ class QwenProvider(LLMProvider):
 
             self._initialized = True
             self.model_load_time_sec = round(_time.monotonic() - _load_start, 2)
+            _MODEL_CACHE[cache_key] = (self.model, self.tokenizer, self._device_resolved)
             logger.info(
-                f"Qwen provider initialized successfully in {self.model_load_time_sec}s"
+                f"Qwen provider initialized successfully in {self.model_load_time_sec}s "
+                f"(model cached for reuse)"
             )
 
         except ImportError as e:

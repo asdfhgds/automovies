@@ -221,6 +221,32 @@ On T4 GPU (15.8GB VRAM):
 - Script generation (narration sections): ~20-60s
 - Full pipeline: ~3-5 minutes
 
+### Troubleshooting: Out-of-Memory
+
+The 7B model is fp16 is ~14GB, so it must be loaded **once**, not once per stage.
+These mitigations are built in:
+
+- **Shared model cache**: the director and script stages reuse a single loaded
+  model (`QwenProvider` class-level cache) instead of loading two copies.
+- **Streamed loading**: `low_cpu_mem_usage=True`, `device_map="auto"` with
+  `max_memory` headroom (`QWEN_VRAM_RESERVE_GB`, default 2.5) — weights stream
+  from disk and overflow spills to CPU instead of crashing.
+- **SDPA attention**: memory-efficient attention, no flash-attn required on T4.
+- **`torch.cuda.empty_cache()`** between stages.
+
+If you still hit `CUDA out of memory`:
+
+1. Use **4-bit** loading (drops the model to ~4GB):
+   ```bash
+   export DIRECTOR_DTYPE=4bit
+   export SCRIPT_DTYPE=4bit
+   ```
+   (requires `pip install bitsandbytes`, included in `scripts/colab_setup.sh`)
+2. Or reduce per-call output length: `DIRECTOR_MAX_NEW_TOKENS=1024`.
+3. If it is **system RAM** (not VRAM) that runs out on free Colab (12GB), keep
+   `device_map="auto"` (already default) and avoid running other cells that
+   allocate big tensors while the model is loaded.
+
 On A100 (40GB VRAM):
 - Qwen3-30B-A3B model loading: ~60-120s
 - Concept generation: ~30-60s

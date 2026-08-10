@@ -133,7 +133,15 @@ configs/
 - **Real Qwen Script Writer** (src/script/qwen_writer.py)
   - Loads director plan + selected scenes, prompts Qwen for narration sections
   - Parses/validates JSON into the canonical `script.json` schema (no fallback)
-  - Records `script_model`, `script_device`, load + generation timings
+  - Records `script_model`, `script_device`, `script_dtype`, load + generation timings
+  - Supports `SCRIPT_DTYPE=4bit` for VRAM-constrained GPUs
+
+- **OOM-safe Qwen loading** (src/director/providers/qwen.py)
+  - Class-level model cache: director + script stages share ONE loaded 7B model
+    (two fp16 copies would exceed a 16GB T4)
+  - `low_cpu_mem_usage` + `device_map="auto"` + `QWEN_VRAM_RESERVE_GB` headroom
+  - SDPA attention; `release_model()` + `empty_cache()` between stages
+  - `DIRECTOR_DTYPE=4bit` / `SCRIPT_DTYPE=4bit` NF4 quantized loading (~4GB)
 
 - **WhisperX Transcription** (src/transcription/whisperx_adapter.py)
   - Real speech-to-text with word-level timestamps

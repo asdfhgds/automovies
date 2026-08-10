@@ -27,6 +27,9 @@ fi
 echo "== [4/6] Transformers + Accelerate (Qwen) =="
 python -m pip install -q "transformers>=4.46" accelerate sentencepiece protobuf
 
+echo "== [4b/6] bitsandbytes (optional 4-bit Qwen when VRAM is tight) =="
+python -m pip install -q bitsandbytes || echo "   bitsandbytes install failed (4-bit mode unavailable; fp16 still works)"
+
 echo "== [5/6] Whisper + PySceneDetect (understanding) =="
 python -m pip install -q openai-whisper scenedetect opencv-python-headless || echo "   (optional understanding deps failed)"
 

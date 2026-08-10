@@ -8,6 +8,7 @@ Qwen model actually generated the script.
 No silent fallback: on any failure this module raises.
 """
 import json
+import os
 import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -167,14 +168,23 @@ def generate_script_qwen(
     max_new_tokens: int = 1024,
     thinking: bool = False,
     temperature: float = 0.7,
+    dtype: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate script.json with a real Qwen model.
 
     Loads the director plan + selected scenes, calls Qwen, parses the narration
     sections, and writes script.json in the canonical schema.
 
+    `dtype` defaults to the SCRIPT_DTYPE env var (or "auto"). Use "4bit" to load
+    the model in NF4 (~4GB) when VRAM is tight. The model is shared with the
+    director stage through QwenProvider's class-level cache, so the 7B weights
+    are only resident once.
+
     Returns the script dict (also persisted). Raises on any failure.
     """
+    if dtype is None:
+        dtype = os.getenv("SCRIPT_DTYPE", "auto")
+
     project_dir = Path(project_dir)
     plan = _load_json(project_dir / "director_plan.json")
     if not plan:
@@ -198,7 +208,7 @@ def generate_script_qwen(
     provider = QwenProvider(
         model=model,
         device=device,
-        dtype="auto",
+        dtype=dtype,
         thinking=thinking,
         temperature=temperature,
         top_p=0.9,
@@ -233,6 +243,7 @@ def generate_script_qwen(
         "script_provider": "qwen",
         "script_model": model,
         "script_device": provider.device_resolved or device,
+        "script_dtype": dtype,
         "qwen_load_time_sec": provider.model_load_time_sec,
         "qwen_generation_time_sec": provider.last_generation_time_sec,
     }
