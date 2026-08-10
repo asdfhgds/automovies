@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 # both would load a full (~14GB fp16) copy of the model and OOM a 16GB T4.
 _MODEL_CACHE: Dict[Any, Any] = {}
 
+# System prompt used when the tokenizer exposes a chat template. Instruct models
+# (e.g. Qwen3-4B-Instruct-2507) respond far more reliably (clean JSON, no chatty
+# prose) when we wrap the raw task prompt in a chat turn.
+_SYSTEM_PROMPT = (
+    "You are a film critic and creative director. You analyze films to develop "
+    "engaging video-essay concepts and production plans. Always answer with "
+    "valid JSON only \u2014 no markdown, no code fences, no surrounding prose."
+)
+
 
 def _gpu_memory_gb() -> Optional[float]:
     """Total VRAM in GB of the first CUDA device, or None if unavailable."""
@@ -524,11 +533,15 @@ Plan now:"""
             # Extract and parse JSON
             result = self._extract_json(output, "concepts")
             if not result:
-                raise ValueError("Failed to extract JSON from generation output")
+                raise ValueError(
+                    f"Failed to extract JSON from generation output: {output[:300]}"
+                )
 
-            concepts = result.get("concepts", [])
+            concepts = self._coerce_concepts(result)
             if not concepts:
-                raise ValueError("Generation returned empty concepts list")
+                raise ValueError(
+                    f"Generation returned empty concepts list. Raw output: {output[:300]}"
+                )
 
             # Validate
             if not self._validate_concepts(concepts):
@@ -540,6 +553,35 @@ Plan now:"""
         except Exception as e:
             logger.error(f"Qwen concept generation failed: {e}")
             raise
+
+    @staticmethod
+    def _coerce_concepts(result: Any) -> List[Dict[str, Any]]:
+        """Coerce whatever the model returned into a list of concept dicts.
+
+        Tolerant of the shapes small instruct models actually emit:
+          {"concepts": [ ... ]}
+          [ ... ]                              (bare array)
+          {"concept": {...}} / {"selected_concept": {...}}
+          {...}                                (single concept at top level)
+        """
+        if isinstance(result, list):
+            return [c for c in result if isinstance(c, dict)]
+        if not isinstance(result, dict):
+            return []
+
+        concepts = result.get("concepts")
+        if isinstance(concepts, list):
+            return [c for c in concepts if isinstance(c, dict)]
+
+        for key in ("concept", "selected_concept"):
+            value = result.get(key)
+            if isinstance(value, dict):
+                return [value]
+
+        if all(k in result for k in ("title", "hook", "thesis")):
+            return [result]
+
+        return []
 
     def refine_concept(
         self, concept: Dict[str, Any], feedback: str
@@ -627,7 +669,7 @@ Provide refined concept as JSON:
             prompt: Input prompt
 
         Returns:
-            Generated text
+            Generated text (only the newly generated tokens, decoded)
         """
         if not self.model or not self.tokenizer:
             raise RuntimeError("Model not initialized")
@@ -645,6 +687,24 @@ Provide refined concept as JSON:
             except Exception:
                 pass
 
+            # Wrap the task in a chat turn when the tokenizer supports it.
+            # Instruct models follow chat formatting much better than raw
+            # completion prompts, which yields cleaner JSON output.
+            try:
+                if hasattr(self.tokenizer, "apply_chat_template"):
+                    chat = self.tokenizer.apply_chat_template(
+                        [
+                            {"role": "system", "content": _SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                    if chat:
+                        prompt = chat
+            except Exception as e:
+                logger.warning(f"apply_chat_template failed ({e}); using raw prompt")
+
             # Tokenize
             inputs = self.tokenizer(
                 prompt,
@@ -653,6 +713,7 @@ Provide refined concept as JSON:
                 truncation=True,
                 max_length=4096,
             )
+            input_len = inputs["input_ids"].shape[1]
 
             # Move to device
             if self._device_resolved == "cuda":
@@ -668,12 +729,9 @@ Provide refined concept as JSON:
                     do_sample=True,
                 )
 
-            # Decode
-            generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-            # Remove the prompt from output
-            if prompt in generated_text:
-                generated_text = generated_text[generated_text.index(prompt) + len(prompt) :]
+            # Decode ONLY the new tokens (drop prompt + chat wrappers).
+            generated_ids = outputs[0][input_len:]
+            generated_text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
 
             self.last_generation_time_sec = round(_time.monotonic() - _gen_start, 2)
             self.generation_times.append(self.last_generation_time_sec)

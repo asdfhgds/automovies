@@ -323,3 +323,39 @@ class TestPromptConstruction:
         assert "3" in prompt  # num_concepts
         assert "JSON" in prompt
         assert "thesis" in prompt.lower()
+
+
+class TestConceptCoercion:
+    """_coerce_concepts must tolerate the shapes small instruct models emit."""
+
+    def test_standard_array(self):
+        from src.director.providers.qwen import QwenProvider
+
+        result = {"concepts": [{"title": "A"}, {"title": "B"}]}
+        concepts = QwenProvider._coerce_concepts(result)
+        assert len(concepts) == 2
+
+    def test_bare_array(self):
+        from src.director.providers.qwen import QwenProvider
+
+        concepts = QwenProvider._coerce_concepts([{"title": "A"}])
+        assert len(concepts) == 1
+
+    def test_single_wrapped(self):
+        from src.director.providers.qwen import QwenProvider
+
+        concepts = QwenProvider._coerce_concepts({"concept": {"title": "A"}})
+        assert concepts[0]["title"] == "A"
+
+    def test_top_level_concept(self):
+        from src.director.providers.qwen import QwenProvider
+
+        concepts = QwenProvider._coerce_concepts({"title": "A", "hook": "h", "thesis": "t"})
+        assert len(concepts) == 1
+
+    def test_empty_returns_empty(self):
+        from src.director.providers.qwen import QwenProvider
+
+        assert QwenProvider._coerce_concepts({}) == []
+        assert QwenProvider._coerce_concepts({"concepts": []}) == []
+        assert QwenProvider._coerce_concepts("not a dict") == []
