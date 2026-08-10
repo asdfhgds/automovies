@@ -66,9 +66,16 @@ def sh(cmd, **kw):
     print("$", cmd)
     subprocess.run(cmd, shell=True, check=True, **kw)
 
-if not os.path.isdir("automovies"):
-    sh(f"git clone --depth 1 -b {BRANCH} {REPO_URL}")
-os.chdir("automovies")
+# Always work from an absolute, deterministic location so re-running this cell
+# never nests extra copies of the repo.
+ROOT = "/content"
+REPO_DIR = os.path.join(ROOT, "automovies")
+os.chdir(ROOT)
+if not os.path.isdir(os.path.join(REPO_DIR, "src")):
+    if os.path.isdir(REPO_DIR):
+        sh(f"rm -rf {REPO_DIR}")
+    sh(f"git clone --depth 1 -b {BRANCH} {REPO_URL} {REPO_DIR}")
+os.chdir(REPO_DIR)
 sh("bash scripts/colab_setup.sh")
 
 # Remember the movie source for the next cells
@@ -96,17 +103,24 @@ print("MOVIE_PATH =", repr(MOVIE_PATH))
 
 cells.append(md("""### Cell 3 — Get + validate the movie
 Priority: if `MOVIE_URL` is set the movie is downloaded from the Google Drive
-share link with `gdown` (large files handled automatically). Otherwise a
-`MOVIE_PATH` on the mounted Drive is used, and if that is also empty the notebook
-prompts you to upload a file. The movie is **never copied into the repo** — only
-its absolute path is registered in the project."""))
+share link with `gdown` (to a fixed path `/content/movie_download`), and then
+verified to actually be a video with `ffprobe` (a shared link that needs
+permissions, or a non-video file, fails loudly here instead of mid-pipeline).
+Otherwise a `MOVIE_PATH` on the mounted Drive is used, and if that is also empty
+the notebook prompts you to upload a file. The movie is **never copied into the
+repo** — only its absolute path is registered in the project."""))
 
 cells.append(code("""# @title 3) Get + validate movie file
-import os
+import os, subprocess
 from IPython.display import display, HTML
 
 MOVIE_PATH = open("/content/movie_path.txt").read().strip()
 MOVIE_URL = open("/content/movie_url.txt").read().strip()
+
+# Tolerate a URL accidentally pasted into the MOVIE_PATH field
+if MOVIE_PATH.startswith("http"):
+    MOVIE_URL = MOVIE_URL or MOVIE_PATH
+    MOVIE_PATH = ""
 
 if MOVIE_URL and not MOVIE_PATH:
     try:
@@ -115,9 +129,10 @@ if MOVIE_URL and not MOVIE_PATH:
         sh("pip install -q gdown")
         import gdown
     print("Downloading movie from Google Drive link:", MOVIE_URL)
-    saved = gdown.download(MOVIE_URL, quiet=False)
-    assert saved, "gdown failed to download the movie"
-    MOVIE_PATH = os.path.abspath(str(saved))
+    # Fixed output path: avoids gdown falling back to a URL-basename filename.
+    saved = gdown.download(MOVIE_URL, output="/content/movie_download", quiet=False)
+    assert saved and os.path.exists(saved), "gdown failed to download the movie"
+    MOVIE_PATH = saved
     open("/content/movie_path.txt", "w").write(MOVIE_PATH)
 
 if not MOVIE_PATH:
@@ -130,11 +145,19 @@ if not MOVIE_PATH:
 MOVIE_PATH = os.path.abspath(os.path.expanduser(MOVIE_PATH))
 print("Movie:", MOVIE_PATH, "exists:", os.path.exists(MOVIE_PATH))
 assert os.path.exists(MOVIE_PATH), "Movie file not found"
-import subprocess
-out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration,size",
-                      "-of", "default=noprint_wrappers=1", MOVIE_PATH],
-                     capture_output=True, text=True)
-print(out.stdout or out.stderr)
+
+probe = subprocess.run(
+    ["ffprobe", "-v", "error", "-show_entries", "format=duration,size",
+     "-show_entries", "stream=codec_type,codec_name,width,height",
+     "-of", "default=noprint_wrappers=1", MOVIE_PATH],
+    capture_output=True, text=True)
+print(probe.stdout or probe.stderr)
+# The downloaded file must actually be a video, not an HTML error page.
+assert "codec_type=video" in (probe.stdout or ""), (
+    "The file at MOVIE_PATH is not a valid video. If using MOVIE_URL, make sure "
+    "it is a real video file shared as 'Anyone with the link'."
+)
+print("OK: valid video file.")
 """))
 
 cells.append(md("""### Cell 4 — Environment + doctor
