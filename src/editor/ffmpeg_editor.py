@@ -212,11 +212,13 @@ def build_render_command(
     height: int = EXPORT_HEIGHT,
     fps: int = EXPORT_FPS,
     audio_sr: int = AUDIO_SR,
+    normalize: bool = True,
 ) -> Dict[str, Any]:
     """Build the ffmpeg command for the full audio-mixed render.
 
     Returns a dict with the prepared ``command`` list plus metadata so callers
-    and tests can inspect the audio pipeline.
+    and tests can inspect the audio pipeline. Set ``normalize=False`` to skip
+    loudnorm+limiter (used as a fallback when the normalized graph fails).
     """
     clips = [Path(c) for c in clip_paths]
     voice = Path(voice_path)
@@ -325,10 +327,15 @@ def build_render_command(
     chains.append(
         f"{mix_inputs}amix=inputs={num_mix}:duration=longest:normalize=0[mix]"
     )
-    chains.append(
-        f"[mix]loudnorm=I=-16:TP=-1.5:LRA=11:print_format=summary,"
-        f"alimiter=limit=0.95[aout]"
-    )
+    if normalize:
+        chains.append(
+            f"[mix]loudnorm=I=-16:TP=-1.5:LRA=11:print_format=summary,"
+            f"alimiter=limit=0.95[aout]"
+        )
+        normalization = "loudnorm=-16LUFS+alimiter-0.95"
+    else:
+        chains.append("[mix]anull[aout]")
+        normalization = None
 
     filter_complex = ";".join(chains)
     command = [
@@ -340,6 +347,7 @@ def build_render_command(
         "-r", str(fps),
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", str(audio_sr),
+        "-movflags", "+faststart",
         str(output),
     ]
     return {
@@ -352,7 +360,7 @@ def build_render_command(
         "subtitle_burned": subtitle_label == "[vsub]",
         "music_used": music_used,
         "ducking": True,
-        "normalization": "loudnorm=-16LUFS+alimiter-0.95",
+        "normalization": normalization,
         "output_path": str(output),
     }
 
@@ -455,10 +463,45 @@ def assemble(project_dir: Path):
     render_info["music_path"] = str(music_path) if music_path else None
     render_info["subtitle_path"] = str(srt_path) if srt_path else None
 
-    try:
-        subprocess.run(render_info["command"], check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"ffmpeg assembly failed: {exc.stderr.strip()}") from exc
+    # Try progressively simpler graphs. The most common Colab failure is the
+    # `subtitles` filter (libass/fontconfig); loudnorm can also fail on short or
+    # silent inputs. Only if every attempt fails do we raise.
+    attempts = [(render_info["command"], "full (subtitles + loudnorm)")]
+    attempts.append(
+        (
+            build_render_command(
+                clip_paths=clips, voice_path=voice, output_path=out_file,
+                srt_path=None, music_path=music_path,
+            )["command"],
+            "without subtitles",
+        )
+    )
+    attempts.append(
+        (
+            build_render_command(
+                clip_paths=clips, voice_path=voice, output_path=out_file,
+                srt_path=None, music_path=music_path, normalize=False,
+            )["command"],
+            "without subtitles + without loudnorm",
+        )
+    )
+
+    first_err = None
+    done = False
+    for cmd, label in attempts:
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            done = True
+            break
+        except subprocess.CalledProcessError as exc:
+            if first_err is None:
+                first_err = (exc.stderr or "").strip()
+            print(f"   render attempt '{label}' failed: {(exc.stderr or '').strip()[-1500:]}")
+    if not done:
+        raise RuntimeError(
+            f"ffmpeg assembly failed on all attempts.\n"
+            f"Primary command stderr:\n{first_err}"
+        )
     if not out_file.exists() or out_file.stat().st_size == 0:
         raise RuntimeError("ffmpeg did not produce a render")
 
