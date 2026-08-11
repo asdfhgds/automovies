@@ -265,15 +265,16 @@ import subprocess, time
 
 PROJECT_ID = open("/content/project_id.txt").read().strip()
 t0 = time.time()
+# Stream output live instead of buffering, and allow up to 2h (full-length
+# movies: transcription + full-frame scene detection + LLM + TTS + render).
 out = subprocess.run(
     ["python", "src/main.py", "run", "--project-id", PROJECT_ID],
-    capture_output=True, text=True, timeout=3600)
+    timeout=7200)
 dt = time.time() - t0
-print(out.stdout or out.stderr)
 print(f"--- pipeline wall time: {dt:.1f}s ---")
 print("(exit code)", out.returncode)
 if out.returncode != 0:
-    raise SystemExit(f"pipeline failed: {out.stderr[-4000:]}")
+    raise SystemExit("pipeline failed (see logs above)")
 """))
 
 cells.append(md("""### Cell 7 — TTS benchmark
