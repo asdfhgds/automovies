@@ -28,6 +28,28 @@ import importlib.util, sys
 print("  python:", sys.version.split()[0])
 for name in ("kokoro", "chatterbox", "qwen3_tts", "soundfile"):
     print(f"  {name}: {'FOUND' if importlib.util.find_spec(name) else 'missing'}")
+# TTS packages may pull an older transformers; re-verify Qwen3 support so the
+# Qwen director still loads upstream.
+try:
+    from transformers import Qwen3ForCausalLM  # noqa: F401
+    import transformers
+    print("  transformers:", transformers.__version__)
+    print("  Qwen3ForCausalLM: OK")
+except Exception as e:
+    import transformers
+    print(f"  Qwen3ForCausalLM MISSING (transformers {transformers.__version__}): {e}")
+    sys.exit(3)
 PY
+if ! python - <<'PY'
+try:
+    from transformers import Qwen3ForCausalLM  # noqa: F401
+    print("Qwen3ForCausalLM OK")
+except Exception:
+    raise SystemExit(3)
+PY
+then
+  echo "   TTS install downgraded transformers -> restoring Qwen3 support"
+  python -m pip install -q -U "transformers" accelerate
+fi
 
 echo "Colab TTS setup complete. Set TTS_DEVICE=cuda before running the pipeline."

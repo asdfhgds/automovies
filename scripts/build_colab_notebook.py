@@ -75,12 +75,19 @@ if not os.path.isdir(os.path.join(REPO_DIR, "src")):
     if os.path.isdir(REPO_DIR):
         sh(f"rm -rf {REPO_DIR}")
     sh(f"git clone --depth 1 -b {BRANCH} {REPO_URL} {REPO_DIR}")
+else:
+    # Already cloned: fetch the latest fixes/scripts without wiping anything.
+    sh(f"git -C {REPO_DIR} fetch origin {BRANCH}")
+    sh(f"git -C {REPO_DIR} reset --hard origin/{BRANCH}")
 os.chdir(REPO_DIR)
 sh("bash scripts/colab_setup.sh")
 
-# Remember the movie source for the next cells
-open("/content/movie_path.txt", "w").write(MOVIE_PATH)
-open("/content/movie_url.txt", "w").write(MOVIE_URL)
+# Remember the movie source for the next cells (keep prior values on re-runs
+# so a downloaded movie or entered URL is not lost).
+if MOVIE_PATH:
+    open("/content/movie_path.txt", "w").write(MOVIE_PATH)
+if MOVIE_URL:
+    open("/content/movie_url.txt", "w").write(MOVIE_URL)
 print("Setup complete. Repo:", os.getcwd())
 """))
 

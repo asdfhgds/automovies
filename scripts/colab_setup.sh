@@ -25,7 +25,25 @@ else
 fi
 
 echo "== [4/6] Transformers + Accelerate (Qwen) =="
-python -m pip install -q "transformers>=4.46" accelerate sentencepiece protobuf
+python -m pip install -q "transformers>=4.52,<5" accelerate sentencepiece protobuf
+
+# Some Colab runtimes preinstall a transformers that predates Qwen3 support.
+# Verify Qwen3ForCausalLM is importable and upgrade to the newest if not.
+if ! python - <<'PY'
+try:
+    from transformers import Qwen3ForCausalLM  # noqa: F401
+except Exception as e:
+    raise SystemExit(f"Qwen3 unsupported in installed transformers: {e}")
+PY
+then
+  echo "   Qwen3ForCausalLM missing -> upgrading transformers to latest"
+  python -m pip install -q -U "transformers" accelerate sentencepiece protobuf
+  python - <<'PY'
+from transformers import Qwen3ForCausalLM  # noqa: F401
+import transformers
+print("   transformers now:", transformers.__version__, "(Qwen3 OK)")
+PY
+fi
 
 echo "== [4b/6] bitsandbytes (optional 4-bit Qwen when VRAM is tight) =="
 python -m pip install -q bitsandbytes || echo "   bitsandbytes install failed (4-bit mode unavailable; fp16 still works)"
