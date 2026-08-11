@@ -201,6 +201,48 @@ def start_pipeline(project_id: str):
     except Exception:
         pass
 
+    # Phase: Scene ranking (use director thesis if available). Runs BEFORE script
+    # generation because both the Qwen and deterministic writers read the
+    # selected-scene evidence produced here.
+    try:
+        from scene_selection.ranker import rank_scenes
+        thesis = None
+        if plan_path and plan_path.exists():
+            try:
+                p = json.loads(plan_path.read_text(encoding='utf-8'))
+                thesis = p.get('thesis')
+            except Exception:
+                thesis = None
+        if thesis:
+            print(f"Ranking scenes for thesis: {thesis}")
+            rank_scenes(project_dir, thesis, top_k=20)
+        else:
+            print("No thesis found; skipping scene ranking")
+    except Exception as e:
+        print(f"Scene ranking failed: {e}")
+
+    # Phase: Scene selection (multi-scene, evidence-driven)
+    sel_path = None
+    try:
+        from scene_selection.selector import select_scenes
+        top_n = 3
+        if plan_path and plan_path.exists():
+            try:
+                p = json.loads(plan_path.read_text(encoding='utf-8'))
+                requested = p.get('scenes_to_extract')
+                if isinstance(requested, list) and requested:
+                    top_n = len(requested)
+                elif isinstance(requested, int) and requested > 0:
+                    top_n = requested
+            except Exception:
+                top_n = 3
+        entries = select_scenes(project_dir, top_n=top_n)
+        sel_path = project_dir / 'scenes' / 'selected_scenes.json'
+        print(f"Selected {len(entries)} scene(s) -> {sel_path}")
+    except Exception as e:
+        print(f"Scene selection failed: {e}")
+        raise
+
     # Phase: Script generation (Qwen when strict or configured, else deterministic)
     script_provider = 'deterministic'
     script_model = None
@@ -252,46 +294,6 @@ def start_pipeline(project_id: str):
     manifest['script_device'] = script_device
     manifest['script_real_generation'] = script_real
     manifest['script_seconds'] = round(time.monotonic() - t0, 2)
-
-    # Phase: Scene ranking (use director thesis if available)
-    try:
-        from scene_selection.ranker import rank_scenes
-        thesis = None
-        if plan_path and plan_path.exists():
-            try:
-                p = json.loads(plan_path.read_text(encoding='utf-8'))
-                thesis = p.get('thesis')
-            except Exception:
-                thesis = None
-        if thesis:
-            print(f"Ranking scenes for thesis: {thesis}")
-            rank_scenes(project_dir, thesis, top_k=20)
-        else:
-            print("No thesis found; skipping scene ranking")
-    except Exception as e:
-        print(f"Scene ranking failed: {e}")
-
-    # Phase: Scene selection (multi-scene, evidence-driven)
-    sel_path = None
-    try:
-        from scene_selection.selector import select_scenes
-        top_n = 3
-        if plan_path and plan_path.exists():
-            try:
-                p = json.loads(plan_path.read_text(encoding='utf-8'))
-                requested = p.get('scenes_to_extract')
-                if isinstance(requested, list) and requested:
-                    top_n = len(requested)
-                elif isinstance(requested, int) and requested > 0:
-                    top_n = requested
-            except Exception:
-                top_n = 3
-        entries = select_scenes(project_dir, top_n=top_n)
-        sel_path = project_dir / 'scenes' / 'selected_scenes.json'
-        print(f"Selected {len(entries)} scene(s) -> {sel_path}")
-    except Exception as e:
-        print(f"Scene selection failed: {e}")
-        raise
 
     # Phase: Clip extraction (one per selected scene)
     try:
