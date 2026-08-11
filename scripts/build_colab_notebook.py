@@ -64,7 +64,11 @@ MOVIE_PATH = ""  # @param {type:"string"} Drive/local path (used if MOVIE_URL is
 
 def sh(cmd, **kw):
     print("$", cmd)
-    subprocess.run(cmd, shell=True, check=True, **kw)
+    p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+    sys.stdout.write(p.stdout or "")
+    if p.returncode != 0:
+        sys.stdout.write(p.stderr or "")
+        raise SystemExit(f"command failed ({p.returncode}): {cmd}\n--- tail ---\n{(p.stderr or '')[-4000:]}")
 
 # Always work from an absolute, deterministic location so re-running this cell
 # never nests extra copies of the repo.
