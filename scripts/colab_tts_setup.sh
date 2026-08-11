@@ -19,8 +19,8 @@ python -m pip install -q "kokoro>=0.9" soundfile || echo "   kokoro install fail
 echo "== [3/5] Chatterbox (resemble-ai/chatterbox, optional voice cloning) =="
 python -m pip install -q chatterbox-tts || echo "   chatterbox-tts install failed (optional)"
 
-echo "== [4/5] Qwen3-TTS (optional, QwenLM/qwen3-tts) =="
-python -m pip install -q "qwen3_tts" || echo "   qwen3_tts install failed (optional)"
+echo "== [4/5] Qwen3-TTS (optional, not yet on PyPI) =="
+python -m pip install -q "qwen3_tts" 2>/dev/null || echo "   qwen3_tts not on PyPI (optional; skipped)"
 
 echo "== [5/5] Verify =="
 python - <<'PY'
@@ -28,8 +28,6 @@ import importlib.util, sys
 print("  python:", sys.version.split()[0])
 for name in ("kokoro", "chatterbox", "qwen3_tts", "soundfile"):
     print(f"  {name}: {'FOUND' if importlib.util.find_spec(name) else 'missing'}")
-# TTS packages may pull an older transformers; re-verify Qwen3 support so the
-# Qwen director still loads upstream.
 try:
     from transformers import Qwen3ForCausalLM  # noqa: F401
     import transformers
@@ -38,18 +36,25 @@ try:
 except Exception as e:
     import transformers
     print(f"  Qwen3ForCausalLM MISSING (transformers {transformers.__version__}): {e}")
-    sys.exit(3)
 PY
+# TTS packages (Kokoro/Chatterbox) may pull a transformers >=5, which removed
+# Qwen3ForCausalLM. Restore the pinned <5 release the Qwen director needs BEFORE
+# any fatal check, so this step heals its own environment.
 if ! python - <<'PY'
 try:
     from transformers import Qwen3ForCausalLM  # noqa: F401
-    print("Qwen3ForCausalLM OK")
+    print("  Qwen3ForCausalLM: OK")
 except Exception:
     raise SystemExit(3)
 PY
 then
-  echo "   TTS install downgraded transformers -> restoring Qwen3 support"
-  python -m pip install -q -U "transformers" accelerate
+  echo "   Qwen3 missing (transformers too new) -> restoring transformers <5"
+  python -m pip install -q -U "transformers>=4.52,<5" accelerate sentencepiece protobuf
+  python - <<'PY'
+from transformers import Qwen3ForCausalLM  # noqa: F401
+import transformers
+print("   transformers now:", transformers.__version__, "(Qwen3 OK)")
+PY
 fi
 
 echo "Colab TTS setup complete. Set TTS_DEVICE=cuda before running the pipeline."
