@@ -16,24 +16,34 @@ echo "== [2/6] Upgrade pip =="
 python -m pip install --upgrade pip -q
 
 echo "== [3/6] PyTorch with CUDA =="
-# Colab normally ships a CUDA-enabled torch on GPU runtimes. If it is missing
-# (e.g. a CPU-only runtime, or a stuck +cpu wheel), (re)install a CUDA build and
-# verify it, failing loudly if the runtime has no GPU at all.
-if python -c "import torch, torch.cuda; assert torch.cuda.is_available()" 2>/dev/null; then
+# Colab normally ships a CUDA-enabled torch on GPU runtimes. Guard on BOTH cuda
+# availability AND torchvision importing cleanly -- transformers<5 imports
+# torchvision, and a torch/torchvision pair built for different PyTorch
+# releases crashes with "operator torchvision::nms does not exist".
+if python - <<'PY'
+import torch
+import torchvision  # noqa: F401
+if not torch.cuda.is_available():
+    raise SystemExit("cuda unavailable")
+PY
+then
   echo "   Using CUDA-enabled PyTorch: $(python -c 'import torch;print(torch.__version__)')"
 else
-  echo "   CUDA torch missing -> reinstalling CUDA wheels"
+  echo "   CUDA/mismatched torch -> reinstalling a consistent CUDA trio (cu124)"
   python -m pip uninstall -y torch torchvision torchaudio 2>/dev/null || true
-  python -m pip install torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu124
+  python -m pip install --force-reinstall --no-deps \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
   python - <<'PY'
 import torch
-print("   torch:", torch.__version__, "cuda available:", torch.cuda.is_available())
+import torchvision  # noqa: F401
+print("   torch:", torch.__version__, "torchvision:", torchvision.__version__)
 if not torch.cuda.is_available():
     raise SystemExit(
         "CUDA still unavailable. This Colab runtime has no GPU visible. "
         "Set Runtime -> Change runtime type -> T4 GPU, then re-run."
     )
+print("   cuda available:", torch.cuda.is_available())
+print("   gpu:", torch.cuda.get_device_name(0))
 PY
 fi
 

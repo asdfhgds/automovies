@@ -22,7 +22,21 @@ python -m pip install -q chatterbox-tts || echo "   chatterbox-tts install faile
 echo "== [4/5] Qwen3-TTS (optional, not yet on PyPI) =="
 python -m pip install -q "qwen3_tts" 2>/dev/null || echo "   qwen3_tts not on PyPI (optional; skipped)"
 
-echo "== [5/5] Verify =="
+echo "== [5/5] Ensure torch/torchvision consistent + verify =="
+# transformers<5 imports torchvision, which crashes hard (operator
+# torchvision::nms does not exist) when torch and torchvision were installed
+# from different PyTorch indices. Reinstall a matching trio if needed.
+if ! python - <<'PY'
+import torch  # noqa: F401
+import torchvision  # noqa: F401
+PY
+then
+  echo "   torch/torchvision mismatch -> reinstalling consistent cu124 trio"
+  python -m pip uninstall -y torch torchvision torchaudio 2>/dev/null || true
+  python -m pip install --force-reinstall --no-deps \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+fi
+
 python - <<'PY'
 import importlib.util, sys
 print("  python:", sys.version.split()[0])
