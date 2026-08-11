@@ -222,12 +222,15 @@ def build_render_command(
     fps: int = EXPORT_FPS,
     audio_sr: int = AUDIO_SR,
     normalize: bool = True,
+    crossfade: bool = True,
 ) -> Dict[str, Any]:
     """Build the ffmpeg command for the full audio-mixed render.
 
     Returns a dict with the prepared ``command`` list plus metadata so callers
     and tests can inspect the audio pipeline. Set ``normalize=False`` to skip
-    loudnorm+limiter (used as a fallback when the normalized graph fails).
+    loudnorm+limiter (used as a fallback when the normalized graph fails) and
+    ``crossfade=False`` to concatenate clips with hard cuts instead of dissolve
+    transitions (fallback for ffmpeg builds without the ``xfade`` filter).
     """
     clips = [Path(c) for c in clip_paths]
     voice = Path(voice_path)
@@ -246,7 +249,7 @@ def build_render_command(
     # shorter than the raw sum. Requires ffmpeg >= 4.3 (`xfade` filter).
     n_clips = len(clips)
     xfade_duration = 0.0
-    crossfades_used = n_clips >= 2
+    crossfades_used = crossfade and n_clips >= 2
     if crossfades_used:
         xfade_duration = min(0.6, min(clip_durations) / 2.0)
         video_total = sum(clip_durations) - (n_clips - 1) * xfade_duration
@@ -290,17 +293,10 @@ def build_render_command(
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
         )
 
-    if n_clips == 1:
-        # Fade in/out on a single-clip cut.
-        chains.append(
-            f"[v0]fade=t=in:st=0:d=0.4,"
-            f"fade=t=out:st={max(0.0, video_total - 0.8):.3f}:d=0.8[vfc]"
-        )
-        video_label = "[vfc]"
-    else:
-        # Fade in on the first clip, dissolve between clips, fade out on the last.
-        chains.append("[v0]fade=t=in:st=0:d=0.4[vin0]")
-        prev = "[vin0]"
+    if crossfades_used:
+        # Dissolve between consecutive clips (video_total already accounts for
+        # the overlap shortening the cut).
+        prev = "[v0]"
         offset = clip_durations[0] - xfade_duration
         for i in range(1, n_clips):
             out = f"[xf{i}]"
@@ -310,10 +306,19 @@ def build_render_command(
             )
             prev = out
             offset += clip_durations[i] - xfade_duration
-        chains.append(
-            f"{prev}fade=t=out:st={max(0.0, video_total - 0.8):.3f}:d=0.8[vfc]"
-        )
-        video_label = "[vfc]"
+        video_label = prev
+    else:
+        # Hard cuts (single clip, or crossfade disabled as a fallback).
+        concat_in = "".join(f"[v{i}]" for i in range(n_clips))
+        chains.append(f"{concat_in}concat=n={n_clips}:v=1:a=0[vc]")
+        video_label = "[vc]"
+
+    # Edge fades: open from black, close to black at the end of the cut.
+    chains.append(
+        f"{video_label}fade=t=in:st=0:d=0.4,"
+        f"fade=t=out:st={max(0.0, video_total - 0.8):.3f}:d=0.8[vfc]"
+    )
+    video_label = "[vfc]"
 
     if pad > 0.001:
         chains.append(f"[vfc]tpad=stop_mode=clone:stop_duration={pad:.3f}[vt]")
@@ -540,6 +545,16 @@ def assemble(project_dir: Path):
                 srt_path=None, music_path=music_path, normalize=False,
             )["command"],
             "without subtitles + without loudnorm",
+        )
+    )
+    attempts.append(
+        (
+            build_render_command(
+                clip_paths=clips, voice_path=voice, output_path=out_file,
+                srt_path=None, music_path=music_path, normalize=False,
+                crossfade=False,
+            )["command"],
+            "without subtitles + without loudnorm + without crossfades",
         )
     )
 
