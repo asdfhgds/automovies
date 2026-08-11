@@ -98,7 +98,10 @@ def test_build_render_command_includes_music_ducking(tmp_path):
     )
     fc = info["filter_complex"]
     assert "amix=inputs=3" in fc
-    assert "[mus][voice]sidechaincompress" in fc
+    # voice is fanned out via asplit (an output pad can only be consumed once)
+    assert "asplit=3[voice0][voice1][voice2]" in fc
+    assert "[mus][voice1]sidechaincompress" in fc
+    assert "[film][voice0]sidechaincompress" in fc
     assert info["music_used"] is True
 
 

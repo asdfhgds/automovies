@@ -300,15 +300,22 @@ def build_render_command(
     else:
         chains.append(f"[{silence_index}:a]anull[film]")
 
-    # --- voice chain ---
-    chains.append(f"[{voice_index}:a:0]aresample={audio_sr},aformat=channel_layouts=stereo[voice]")
+    # --- voice chain (fan out once per consumer: a filtergraph output pad can
+    # only be consumed once -- newer ffmpeg rejects reuse with "Invalid stream
+    # specifier") ---
+    voice_consumers = 2 + (1 if music_path is not None else 0)
+    voice_pads = "".join(f"[voice{i}]" for i in range(voice_consumers))
+    chains.append(
+        f"[{voice_index}:a:0]aresample={audio_sr},aformat=channel_layouts=stereo,"
+        f"asplit={voice_consumers}{voice_pads}"
+    )
 
     # Duck film audio under narration
     chains.append(
-        f"[film][voice]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300[filmD]"
+        f"[film][voice0]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300[filmD]"
     )
 
-    mix_inputs = "[filmD][voice]"
+    mix_inputs = f"[filmD][voice{voice_consumers - 1}]"
     num_mix = 2
     music_used = False
     if music_path is not None:
@@ -317,7 +324,7 @@ def build_render_command(
             f"volume=0.25[mus]"
         )
         chains.append(
-            f"[mus][voice]sidechaincompress=threshold=0.05:ratio=10:attack=50:release=400[musD]"
+            f"[mus][voice1]sidechaincompress=threshold=0.05:ratio=10:attack=50:release=400[musD]"
         )
         mix_inputs += "[musD]"
         num_mix = 3
