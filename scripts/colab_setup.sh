@@ -16,12 +16,25 @@ echo "== [2/6] Upgrade pip =="
 python -m pip install --upgrade pip -q
 
 echo "== [3/6] PyTorch with CUDA =="
-# Colab normally ships a CUDA-enabled torch; keep it. Reinstall only if missing.
+# Colab normally ships a CUDA-enabled torch on GPU runtimes. If it is missing
+# (e.g. a CPU-only runtime, or a stuck +cpu wheel), (re)install a CUDA build and
+# verify it, failing loudly if the runtime has no GPU at all.
 if python -c "import torch, torch.cuda; assert torch.cuda.is_available()" 2>/dev/null; then
-  echo "   Using preinstalled CUDA-enabled PyTorch: $(python -c 'import torch;print(torch.__version__)')"
+  echo "   Using CUDA-enabled PyTorch: $(python -c 'import torch;print(torch.__version__)')"
 else
-  echo "   CUDA torch missing -> installing cu121 wheels"
-  python -m pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+  echo "   CUDA torch missing -> reinstalling CUDA wheels"
+  python -m pip uninstall -y torch torchvision torchaudio 2>/dev/null || true
+  python -m pip install torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu124
+  python - <<'PY'
+import torch
+print("   torch:", torch.__version__, "cuda available:", torch.cuda.is_available())
+if not torch.cuda.is_available():
+    raise SystemExit(
+        "CUDA still unavailable. This Colab runtime has no GPU visible. "
+        "Set Runtime -> Change runtime type -> T4 GPU, then re-run."
+    )
+PY
 fi
 
 echo "== [4/6] Transformers + Accelerate (Qwen) =="
