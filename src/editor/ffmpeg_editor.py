@@ -130,10 +130,18 @@ def build_timeline(project_dir: Path):
     script_path = project_dir / "script.json"
     if script_path.exists():
         script = json.loads(script_path.read_text(encoding="utf-8"))
+        # Distribute subtitle windows proportionally to the REAL narration
+        # duration (voice.wav) instead of the rough estimated_seconds, so each
+        # line appears roughly when it is actually spoken.
+        sections = script.get("sections", [])
+        total_est = sum(max(0.1, float(s.get("estimated_seconds", 1))) for s in sections)
+        if total_est <= 0:
+            total_est = 1.0
         cursor = 0.0
-        for section in script.get("sections", []):
-            duration = max(0.1, float(section.get("estimated_seconds", 1)))
-            duration = min(duration, total_duration - cursor)
+        for section in sections:
+            frac = max(0.1, float(section.get("estimated_seconds", 1))) / total_est
+            duration = frac * voice_duration
+            duration = min(duration, max(0.0, total_duration - cursor))
             if duration <= 0:
                 break
             builder.add_subtitle(section.get("text", ""), cursor, duration)
@@ -289,7 +297,8 @@ def build_render_command(
     if audio_clip_indices:
         for i in audio_clip_indices:
             chains.append(
-                f"[{i}:a]aresample={audio_sr},aformat=channel_layouts=stereo[af{i}]"
+                f"[{i}:a]aresample={audio_sr},aformat=channel_layouts=stereo,"
+                f"volume=0.5[af{i}]"
             )
         if len(audio_clip_indices) == 1:
             i = audio_clip_indices[0]
@@ -302,17 +311,18 @@ def build_render_command(
 
     # --- voice chain (fan out once per consumer: a filtergraph output pad can
     # only be consumed once -- newer ffmpeg rejects reuse with "Invalid stream
-    # specifier") ---
+    # specifier"). Narration gets a small gain so it clearly leads the mix. ---
     voice_consumers = 2 + (1 if music_path is not None else 0)
     voice_pads = "".join(f"[voice{i}]" for i in range(voice_consumers))
     chains.append(
         f"[{voice_index}:a:0]aresample={audio_sr},aformat=channel_layouts=stereo,"
-        f"asplit={voice_consumers}{voice_pads}"
+        f"volume=1.25,asplit={voice_consumers}{voice_pads}"
     )
 
-    # Duck film audio under narration
+    # Duck film audio hard under narration so the voiceover leads the mix.
     chains.append(
-        f"[film][voice0]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300[filmD]"
+        f"[film][voice0]sidechaincompress=threshold=0.01:ratio=12:attack=15:"
+        f"release=300:makeup=1[filmD]"
     )
 
     mix_inputs = f"[filmD][voice{voice_consumers - 1}]"
@@ -324,7 +334,8 @@ def build_render_command(
             f"volume=0.25[mus]"
         )
         chains.append(
-            f"[mus][voice1]sidechaincompress=threshold=0.05:ratio=10:attack=50:release=400[musD]"
+            f"[mus][voice1]sidechaincompress=threshold=0.01:ratio=12:attack=20:"
+            f"release=400[musD]"
         )
         mix_inputs += "[musD]"
         num_mix = 3
