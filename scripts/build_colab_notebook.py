@@ -283,6 +283,9 @@ records model / device / generation time / duration / sample rate / status in
 `reports/tts_benchmark.json`."""))
 
 cells.append(code("""# @title 7) TTS benchmark (CUDA)
+import sys
+sys.path.insert(0, "src")
+
 from generation.tts_benchmark import benchmark_tts
 
 PROJECT_ID = open("/content/project_id.txt").read().strip()
@@ -303,8 +306,10 @@ Runs the QC critic (artifact existence, real-TTS flag, no clipping via
 `volumedetect`, render probe) and shows the provider manifest."""))
 
 cells.append(code("""# @title 8) QC + validation + manifest
-import json, subprocess
+import json, subprocess, sys
 from pathlib import Path
+
+sys.path.insert(0, "src")
 
 PROJECT_ID = open("/content/project_id.txt").read().strip()
 proj = Path("data") / PROJECT_ID
