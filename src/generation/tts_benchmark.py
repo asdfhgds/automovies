@@ -9,6 +9,7 @@ shows exactly what was and was not benchmarked.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -28,7 +29,18 @@ def _provider_instance(name: str, config: dict):
         return MockTTSProvider()
     from generation.provider_factory import get_tts_provider
 
-    return get_tts_provider({"provider": name, **config})
+    # get_tts_provider reads TTS_PROVIDER from the environment first, which the
+    # notebook sets (e.g. to kokoro). Force the provider being benchmarked so a
+    # "chatterbox" entry really runs Chatterbox and not a kokoro copy.
+    prev = os.environ.get("TTS_PROVIDER")
+    os.environ["TTS_PROVIDER"] = name
+    try:
+        return get_tts_provider({"provider": name, **config})
+    finally:
+        if prev is None:
+            os.environ.pop("TTS_PROVIDER", None)
+        else:
+            os.environ["TTS_PROVIDER"] = prev
 
 
 def benchmark_tts(
