@@ -1,8 +1,9 @@
 """Timeline-backed FFmpeg renderer for the MVP profile.
 
 Supports a multi-scene cut: every selected scene clip is concatenated in
-selection order, scaled to the export resolution, and mixed with the generated
-voiceover. The audio pipeline now provides:
+selection order with short dissolve transitions between cuts (and a fade
+in/out at the edges), scaled to the export resolution, and mixed with the
+generated voiceover. The audio pipeline now provides:
 
 - real narration mixed over the selected movie clips (film audio preserved),
 - basic movie-audio ducking (sidechain compressor keyed on the narration),
@@ -238,7 +239,19 @@ def build_render_command(
 
     voice_duration = _probe_duration(voice)
     clip_durations = [_probe_duration(c) for c in clips]
-    video_total = sum(clip_durations)
+
+    # "The edit": dissolve transitions between consecutive clips so the cut
+    # feels intentional instead of clip-hopping. Each transition overlaps two
+    # clips by xfade_duration, so the assembled video is (N-1) * xfade_duration
+    # shorter than the raw sum. Requires ffmpeg >= 4.3 (`xfade` filter).
+    n_clips = len(clips)
+    xfade_duration = 0.0
+    crossfades_used = n_clips >= 2
+    if crossfades_used:
+        xfade_duration = min(0.6, min(clip_durations) / 2.0)
+        video_total = sum(clip_durations) - (n_clips - 1) * xfade_duration
+    else:
+        video_total = sum(clip_durations)
     total_duration = max(video_total, voice_duration)
     pad = max(0.0, total_duration - video_total)
 
@@ -271,17 +284,39 @@ def build_render_command(
     chains = []
 
     # --- video chain ---
-    for i in range(len(clips)):
+    for i in range(n_clips):
         chains.append(
             f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
         )
-    concat_in = "".join(f"[v{i}]" for i in range(len(clips)))
-    chains.append(f"{concat_in}concat=n={len(clips)}:v=1:a=0[vc]")
 
-    video_label = "[vc]"
+    if n_clips == 1:
+        # Fade in/out on a single-clip cut.
+        chains.append(
+            f"[v0]fade=t=in:st=0:d=0.4,"
+            f"fade=t=out:st={max(0.0, video_total - 0.8):.3f}:d=0.8[vfc]"
+        )
+        video_label = "[vfc]"
+    else:
+        # Fade in on the first clip, dissolve between clips, fade out on the last.
+        chains.append("[v0]fade=t=in:st=0:d=0.4[vin0]")
+        prev = "[vin0]"
+        offset = clip_durations[0] - xfade_duration
+        for i in range(1, n_clips):
+            out = f"[xf{i}]"
+            chains.append(
+                f"{prev}[v{i}]xfade=transition=dissolve:"
+                f"duration={xfade_duration:.3f}:offset={offset:.3f}{out}"
+            )
+            prev = out
+            offset += clip_durations[i] - xfade_duration
+        chains.append(
+            f"{prev}fade=t=out:st={max(0.0, video_total - 0.8):.3f}:d=0.8[vfc]"
+        )
+        video_label = "[vfc]"
+
     if pad > 0.001:
-        chains.append(f"[vc]tpad=stop_mode=clone:stop_duration={pad:.3f}[vt]")
+        chains.append(f"[vfc]tpad=stop_mode=clone:stop_duration={pad:.3f}[vt]")
         video_label = "[vt]"
 
     subtitle_label = video_label
@@ -375,6 +410,8 @@ def build_render_command(
         "total_duration_sec": total_duration,
         "video_total_sec": video_total,
         "pad_sec": pad,
+        "crossfades_used": crossfades_used,
+        "xfade_duration_sec": xfade_duration,
         "subtitle_burned": subtitle_label == "[vsub]",
         "music_used": music_used,
         "ducking": True,
@@ -403,6 +440,8 @@ def _render_job(project_dir: Path, timeline, output_path: Path, render_info: Dic
             }
             for item in video_track.items
         ],
+        "crossfades_used": render_info.get("crossfades_used", False),
+        "xfade_duration_sec": render_info.get("xfade_duration_sec", 0.0),
         "subtitles": [
             {
                 "start_sec": item.start_sec,
@@ -413,8 +452,8 @@ def _render_job(project_dir: Path, timeline, output_path: Path, render_info: Dic
         ] if text_track else [],
         "audio_mix": {
             "voice_path": str(voice),
-            "voice_gain_db": 0,
-            "film_ducking": "sidechaincompress threshold=0.05 ratio=8",
+            "voice_gain_db": 2,
+            "film_ducking": "sidechaincompress threshold=0.01 ratio=12 makeup=1",
             "music_path": render_info.get("music_path"),
             "music_gain_db": None,
             "music_ducking": render_info.get("music_used", False),

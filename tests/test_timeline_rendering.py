@@ -89,7 +89,7 @@ def test_pipeline_artifacts_produce_valid_render(tmp_path: Path):
     render_job = json.loads((project / "renders" / "render_job.json").read_text())
     assert render_job["status"] == "done"
     assert render_job["audio_mix"]["no_clipping"] is True
-    assert render_job["audio_mix"]["film_ducking"] == "sidechaincompress threshold=0.05 ratio=8"
+    assert render_job["audio_mix"]["film_ducking"] == "sidechaincompress threshold=0.01 ratio=12 makeup=1"
     # subtitles burned into the render when libass is present
     if (project / "renders" / "subtitles.srt").exists():
         assert render_job["subtitles"], "subtitle track should be recorded"
@@ -169,3 +169,6 @@ def test_multi_clip_pipeline_artifacts_produce_valid_render(tmp_path: Path):
     assert len(render_job["timeline"]) == 2
     assert render_job["audio_mix"]["no_clipping"] is True
     assert render_job["audio_mix"]["normalization"]
+    # the multi-clip cut should actually dissolve between the two scenes
+    assert render_job["crossfades_used"] is True
+    assert render_job["xfade_duration_sec"] > 0
