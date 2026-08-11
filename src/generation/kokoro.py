@@ -49,7 +49,9 @@ class KokoroTTSProvider(TTSProvider):
         config = config or {}
         self.repo_id = config.get("repo_id", repo_id)
         self.lang_code = config.get("lang_code", "a")  # 'a' = American English
-        self.default_voice = config.get("voice", "am_adam")
+        raw_voice = config.get("voice", "am_adam")
+        # Treat the benchmark/API sentinel "default" as "use the real default".
+        self.default_voice = "am_adam" if raw_voice in ("default", "", "None") else raw_voice
         self.model = config.get("model", KOKORO_REPO)
         self.device = resolve_device(device or config.get("device"))
 

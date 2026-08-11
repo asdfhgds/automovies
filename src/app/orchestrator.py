@@ -376,6 +376,8 @@ def start_pipeline(project_id: str):
         assemble(project_dir)
     except Exception as e:
         print(f"Assembly failed: {e}")
+        if strict:
+            raise RuntimeError(f"Assembly failed in strict mode: {e}") from e
 
     # Phase: QC
     try:
