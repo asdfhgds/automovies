@@ -106,8 +106,14 @@ drive.mount("/content/drive")
 
 sh("bash scripts/colab_tts_setup.sh")
 
-MOVIE_PATH = open("/content/movie_path.txt").read().strip()
-MOVIE_URL = open("/content/movie_url.txt").read().strip()
+def _read(p):
+    try:
+        return open(p).read().strip()
+    except FileNotFoundError:
+        return ""
+
+MOVIE_PATH = _read("/content/movie_path.txt")
+MOVIE_URL = _read("/content/movie_url.txt")
 print("MOVIE_URL =", repr(MOVIE_URL))
 print("MOVIE_PATH =", repr(MOVIE_PATH))
 """))
@@ -128,8 +134,14 @@ cells.append(code("""# @title 3) Get + validate movie file
 import os, re, subprocess
 from IPython.display import display, HTML
 
-MOVIE_PATH = open("/content/movie_path.txt").read().strip()
-MOVIE_URL = open("/content/movie_url.txt").read().strip()
+def _read(p):
+    try:
+        return open(p).read().strip()
+    except FileNotFoundError:
+        return ""
+
+MOVIE_PATH = _read("/content/movie_path.txt")
+MOVIE_URL = _read("/content/movie_url.txt")
 
 # Tolerate a URL accidentally pasted into the MOVIE_PATH field
 if MOVIE_PATH.startswith("http"):
@@ -219,7 +231,14 @@ cells.append(code("""# @title 5) init project
 import subprocess
 from pathlib import Path
 
-MOVIE_PATH = open("/content/movie_path.txt").read().strip()
+def _read(p):
+    try:
+        return open(p).read().strip()
+    except FileNotFoundError:
+        return ""
+
+MOVIE_PATH = _read("/content/movie_path.txt")
+assert MOVIE_PATH, "no movie was registered - run Cell 3 first"
 MOVIE_PATH = Path(MOVIE_PATH).expanduser().resolve()
 out = subprocess.run(
     ["python", "src/main.py", "init",
