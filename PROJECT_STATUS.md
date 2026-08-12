@@ -1,9 +1,10 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: Real TTS milestone — Kokoro/Chatterbox/Qwen3-TTS providers +
-audio pipeline (ducking, normalization, no-clipping, burned subtitles) + GPU
-benchmark + Colab real-movie notebook. Local E2E render validated; real-TTS GPU
-run pending (user-supplied movie, see `notebooks/colab_real_movie_tts.ipynb`).
+**Last Updated**: Editorial pipeline milestone — movie intelligence layer +
+evidence-driven editorial planning/script/timeline + editorial FFmpeg renderer.
+138 tests pass locally; a Colab GPU notebook
+(`notebooks/colab_editorial_gpu.ipynb`) is ready to prove the new editorial
+pipeline on a real movie (user-supplied, GPU run pending).
 
 ## Executive Summary
 
@@ -364,6 +365,27 @@ python src/main.py run --project-id <id>
 
 ## Next Steps (Priority Order)
 
+### 0. Editorial Pipeline (Evidence-Driven Cut) ✅ Local / ⏳ GPU
+- ✅ Movie intelligence layer (`src/movie_understanding/`): analyzer, scene
+  enricher (summary/topics/dialogue/characters/tone), character index, event
+  index, semantic index (TF-IDF), movie memory persistence
+- ✅ Editorial planning (`src/editorial/`): EditorialPlan models,
+  heuristic planner (hook/thesis/evidence/close), evidence retrieval
+  (semantic + lexical + dialogue), evidence-aligned script with short captions,
+  editorial timeline builder (excerpt extraction), editorial FFmpeg renderer
+  (per-clip speed/crop/hold, xfade transitions, edge fades, narration-dominant
+  audio mix, burned subtitles), QC wiring
+- ✅ Orchestrator `EDITORIAL_MODE=true` path: movie analysis → editorial plan →
+  editorial script → editorial timeline → editorial render
+- ✅ Fixed: editorial timeline was wired to `movie_index` instead of the script
+  (narration windows/segments now use the real planned timing)
+- ✅ Fixed: editorial renderer now applies `fps=` to every clip so `xfade`
+  inputs share a timebase (mixed frame-rate sources no longer fail with
+  "First input link timebase ... do not match ... xfade timebase")
+- ✅ Local E2E: 138 tests pass; editorial orchestrator test proves all artifacts
+- ⏳ GPU: `notebooks/colab_editorial_gpu.ipynb` ready — real Qwen director,
+  real TTS, editorial render on a user-supplied movie
+
 ### 1. Timeline-Based Rendering Integration
 - ✅ Connect existing orchestrator to timeline system
 - ✅ Implement renderer that consumes Timeline objects
@@ -487,10 +509,35 @@ grep -A 20 "profiles:" configs/profiles.yaml
   - `configs/profiles.yaml` - colab-gpu script→qwen; qwen provider block + script provider block
   - Documentation: `COLAB_INSTRUCTIONS.md`, `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`
 
+## Files Changed This Session (Editorial Milestone)
+
+- **Created**:
+  - `src/movie_understanding/` — analyzer, scene/character/event analyzers,
+    semantic index, text utils, movie memory persistence
+  - `src/editorial/` — plan models, director (heuristic + Qwen stub),
+    retrieval, script builder, timeline builder, subtitle chunking, renderer
+  - `tests/` — `test_editorial.py`, `test_editorial_orchestrator.py`,
+    `test_editorial_render.py`, `test_movie_understanding.py`,
+    `editorial_fixtures.py`, `__init__.py`
+  - `notebooks/colab_editorial_gpu.ipynb` — 18-cell GPU validation notebook
+    for the editorial pipeline (real Qwen + real TTS + editorial render)
+  - `NEXT_MILESTONE.md` — handoff: PROVEN/EXPERIMENTAL/FAILED/KNOWN
+    LIMITATIONS/CURRENT BOTTLENECK/NEXT ACTION
+
+- **Modified**:
+  - `src/app/orchestrator.py` — `EDITORIAL_MODE=true` phase (movie analysis,
+    editorial plan/script/timeline, editorial assembly); editorial timeline
+    wired to the script (was movie_index); `_run_script_stage` extraction
+  - `src/editorial/render.py` — per-clip timebase normalization for xfade
+  - `src/qc/critic.py` — editorial cut checks
+  - `notebooks/colab_real_movie_tts.ipynb` — replaced by editorial GPU notebook
+  - Documentation: `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`,
+
 ## Test Results
 
 ```
-112 fast tests ............................ PASS
+138 fast tests ............................ PASS (incl. editorial + movie_understanding suites)
+```
   - 26 Qwen provider tests (incl. placeholder-guard + plain-text fallback)
   - 10 Creative director tests
   - 17 Strict-mode + Qwen script writer tests

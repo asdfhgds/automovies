@@ -64,10 +64,35 @@ def run_qc(project_dir: Path):
     checks['assets'] = any((project_dir / 'assets').glob('*')) if (project_dir / 'assets').exists() else False
     checks['render'] = (project_dir / 'renders' / 'final_render.mp4').exists()
 
+    # Editorial cut: require plan + timeline + excerpts instead of the legacy
+    # single-clip-per-scene artifacts.
+    editorial = False
+    editorial_timeline = project_dir / 'timeline' / 'editorial_timeline.json'
+    editorial_plan = project_dir / 'editorial_plan.json'
+    if editorial_timeline.exists() and editorial_plan.exists():
+        tl = json.loads(editorial_timeline.read_text(encoding='utf-8'))
+        if tl.get('mode') == 'editorial':
+            editorial = True
+            excerpts = [
+                clip['content_path']
+                for seg in tl.get('segments', [])
+                for clip in seg.get('video', [])
+            ]
+            checks['editorial_plan'] = True
+            checks['editorial_timeline'] = True
+            checks['editorial_excerpts'] = (
+                len(excerpts) > 0
+                and all(Path(p).exists() and Path(p).stat().st_size > 0 for p in excerpts)
+            )
+
     # multi-scene cut: require a selection file and a clip per selected scene
     selected_scenes_path = project_dir / 'scenes' / 'selected_scenes.json'
     selected_scene_path = project_dir / 'scenes' / 'selected_scene.json'
-    if selected_scenes_path.exists():
+    if editorial:
+        checks['selected_scenes'] = (selected_scenes_path.exists()
+                                     or selected_scene_path.exists())
+        checks['scene_clips'] = True
+    elif selected_scenes_path.exists():
         selections = json.loads(selected_scenes_path.read_text(encoding='utf-8'))
         checks['selected_scenes'] = isinstance(selections, list) and len(selections) > 0
         checks['scene_clips'] = all(
@@ -130,7 +155,8 @@ def run_qc(project_dir: Path):
         'checks': checks,
         'passed': all(
             v is True for k, v in checks.items()
-            if k.startswith(('director', 'script', 'scene', 'assets', 'render', 'selected', 'narration_real_tts', 'no_clipping', 'tts_benchmark'))
+            if k.startswith(('director', 'script', 'scene', 'assets', 'render', 'selected',
+                             'narration_real_tts', 'no_clipping', 'tts_benchmark', 'editorial'))
         ),
     }
     out = project_dir / 'reports'

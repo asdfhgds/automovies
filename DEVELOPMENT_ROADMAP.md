@@ -2,6 +2,18 @@
 
 ## Current Status (Completed) ✅
 
+### Editorial Pipeline (Evidence-Driven Cut)
+- ✅ Movie intelligence layer (`src/movie_understanding/`): analyzer, scene
+  enrichment (summary/topics/dialogue/characters/tone), character/event
+  indexes, semantic index, movie memory
+- ✅ Editorial planning (`src/editorial/`): EditorialPlan models, heuristic
+  planner, evidence retrieval, evidence-aligned script (short captions),
+  editorial timeline (excerpts), editorial FFmpeg renderer
+- ✅ Orchestrator `EDITORIAL_MODE=true` wired end-to-end; QC covers the
+  editorial cut
+- ✅ 138 tests pass locally (editorial + movie-understanding suites added)
+- ⏳ GPU validation notebook: `notebooks/colab_editorial_gpu.ipynb`
+
 ### Foundation: Movie Understanding (Real & Tested)
 - ✅ **Transcription**: Whisper/WhisperX with word-level timestamps
 - ✅ **Scene Detection**: PySceneDetect for shot/scene boundaries
@@ -292,11 +304,12 @@ Improve quality and reduce costs through iteration.
 ## Priority Queue
 
 ### High Priority (Do First)
-1. ✅ Real Qwen LLM provider (Phase 1 — DONE, tested on GPU path; Colab run pending)
+1. ✅ Real Qwen LLM provider (Phase 1 — DONE, tested on GPU path)
 2. ✅ Script generation via LLM (Qwen) — subsumed by the real script writer
 3. ✅ Real TTS (Phase 2) — Kokoro / Chatterbox / Qwen3-TTS + audio mix + benchmark
-4. ⏳ Execute `notebooks/colab_real_movie_tts.ipynb` on T4/A100 with a user-supplied movie → attach manifest + real MP4
-5. ⏳ Evaluate several real videos; document weaknesses → decide next milestone
+4. ✅ Editorial pipeline (movie intelligence + evidence-driven editorial plan/script/timeline/render) — local E2E proven
+5. ⏳ Run `notebooks/colab_editorial_gpu.ipynb` on T4/A100 with a user-supplied movie → watch the edited short
+6. ⏳ Evaluate several real videos; pick next milestone from the largest visible weakness
 
 ### Medium Priority (Do After)
 4. Integrate stock footage API

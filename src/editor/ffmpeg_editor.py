@@ -25,6 +25,13 @@ EXPORT_HEIGHT = 720
 EXPORT_FPS = 30
 AUDIO_SR = 44100
 
+# Cinematic audio mix defaults (shared between the plain montage render and the
+# editorial render). Kept as module constants so the two renderers stay in sync.
+FILM_VOLUME = 0.5
+VOICE_VOLUME = 1.25
+MUSIC_VOLUME = 0.25
+DUCK_THRESHOLD = 0.01
+
 
 # --------------------------------------------------------------------------
 # ffprobe helpers
@@ -211,6 +218,88 @@ def _burn_subtitles_supported() -> bool:
 # Render command builder (unit-testable without running ffmpeg)
 # --------------------------------------------------------------------------
 
+def _audio_mix_chains(
+    chains: list,
+    audio_clip_indices: list,
+    silence_index: Optional[int],
+    voice_index: int,
+    audio_sr: int,
+    music_path: Optional[Path],
+    music_index: Optional[int],
+    normalize: bool,
+    film_volume: float = FILM_VOLUME,
+    voice_volume: float = VOICE_VOLUME,
+    duck_threshold: float = DUCK_THRESHOLD,
+    music_volume: float = MUSIC_VOLUME,
+):
+    """Append the film + narration + optional music mix chains to ``chains``.
+
+    Shared by the plain montage render and the editorial render so both produce
+    byte-identical audio graphs for identical inputs. Returns
+    ``(music_used, normalization)``.
+    """
+    # Film audio: each clip's soundtrack normalized, concatenated, lowered.
+    if audio_clip_indices:
+        for i in audio_clip_indices:
+            chains.append(
+                f"[{i}:a]aresample={audio_sr},aformat=channel_layouts=stereo,"
+                f"volume={film_volume:g}[af{i}]"
+            )
+        if len(audio_clip_indices) == 1:
+            i = audio_clip_indices[0]
+            chains.append(f"[af{i}]anull[film]")
+        else:
+            concat_a = "".join(f"[af{i}]" for i in audio_clip_indices)
+            chains.append(f"{concat_a}concat=n={len(audio_clip_indices)}:v=0:a=1[film]")
+    else:
+        chains.append(f"[{silence_index}:a]anull[film]")
+
+    # Narration, fanned out once per consumer.
+    voice_consumers = 2 + (1 if music_path is not None else 0)
+    voice_pads = "".join(f"[voice{i}]" for i in range(voice_consumers))
+    chains.append(
+        f"[{voice_index}:a:0]aresample={audio_sr},aformat=channel_layouts=stereo,"
+        f"volume={voice_volume:g},asplit={voice_consumers}{voice_pads}"
+    )
+
+    # Duck film audio hard under narration so the voiceover leads the mix.
+    chains.append(
+        f"[film][voice0]sidechaincompress=threshold={duck_threshold:g}:ratio=12:"
+        f"attack=15:release=300:makeup=1[filmD]"
+    )
+
+    mix_inputs = f"[filmD][voice{voice_consumers - 1}]"
+    num_mix = 2
+    music_used = False
+    if music_path is not None:
+        chains.append(
+            f"[{music_index}:a:0]aresample={audio_sr},aformat=channel_layouts=stereo,"
+            f"volume={music_volume:g}[mus]"
+        )
+        chains.append(
+            f"[mus][voice1]sidechaincompress=threshold={duck_threshold:g}:ratio=12:"
+            f"attack=20:release=400[musD]"
+        )
+        mix_inputs += "[musD]"
+        num_mix = 3
+        music_used = True
+
+    # Mix + normalize + limiter (no clipping).
+    chains.append(
+        f"{mix_inputs}amix=inputs={num_mix}:duration=longest:normalize=0[mix]"
+    )
+    if normalize:
+        chains.append(
+            f"[mix]loudnorm=I=-16:TP=-1.5:LRA=11:print_format=summary,"
+            f"alimiter=limit=0.95[aout]"
+        )
+        normalization = "loudnorm=-16LUFS+alimiter-0.95"
+    else:
+        chains.append("[mix]anull[aout]")
+        normalization = None
+    return music_used, normalization
+
+
 def build_render_command(
     clip_paths: list,
     voice_path: Path,
@@ -334,66 +423,25 @@ def build_render_command(
         subtitle_label = "[vsub]"
 
     # --- film audio chain (movie dialogue/sound under narration) ---
-    if audio_clip_indices:
-        for i in audio_clip_indices:
-            chains.append(
-                f"[{i}:a]aresample={audio_sr},aformat=channel_layouts=stereo,"
-                f"volume=0.5[af{i}]"
-            )
-        if len(audio_clip_indices) == 1:
-            i = audio_clip_indices[0]
-            chains.append(f"[af{i}]anull[film]")
-        else:
-            concat_a = "".join(f"[af{i}]" for i in audio_clip_indices)
-            chains.append(f"{concat_a}concat=n={len(audio_clip_indices)}:v=0:a=1[film]")
-    else:
-        chains.append(f"[{silence_index}:a]anull[film]")
-
     # --- voice chain (fan out once per consumer: a filtergraph output pad can
     # only be consumed once -- newer ffmpeg rejects reuse with "Invalid stream
     # specifier"). Narration gets a small gain so it clearly leads the mix. ---
-    voice_consumers = 2 + (1 if music_path is not None else 0)
-    voice_pads = "".join(f"[voice{i}]" for i in range(voice_consumers))
-    chains.append(
-        f"[{voice_index}:a:0]aresample={audio_sr},aformat=channel_layouts=stereo,"
-        f"volume=1.25,asplit={voice_consumers}{voice_pads}"
+    #    Duck film audio hard under narration so the voiceover leads the mix.
+    #    Optional music is ducked too, then everything is mixed and normalized.
+    music_used, normalization = _audio_mix_chains(
+        chains,
+        audio_clip_indices,
+        silence_index,
+        voice_index,
+        audio_sr,
+        music_path,
+        music_index,
+        normalize,
+        film_volume=FILM_VOLUME,
+        voice_volume=VOICE_VOLUME,
+        duck_threshold=DUCK_THRESHOLD,
+        music_volume=MUSIC_VOLUME,
     )
-
-    # Duck film audio hard under narration so the voiceover leads the mix.
-    chains.append(
-        f"[film][voice0]sidechaincompress=threshold=0.01:ratio=12:attack=15:"
-        f"release=300:makeup=1[filmD]"
-    )
-
-    mix_inputs = f"[filmD][voice{voice_consumers - 1}]"
-    num_mix = 2
-    music_used = False
-    if music_path is not None:
-        chains.append(
-            f"[{music_index}:a:0]aresample={audio_sr},aformat=channel_layouts=stereo,"
-            f"volume=0.25[mus]"
-        )
-        chains.append(
-            f"[mus][voice1]sidechaincompress=threshold=0.01:ratio=12:attack=20:"
-            f"release=400[musD]"
-        )
-        mix_inputs += "[musD]"
-        num_mix = 3
-        music_used = True
-
-    # --- mix + normalize + limiter (no clipping) ---
-    chains.append(
-        f"{mix_inputs}amix=inputs={num_mix}:duration=longest:normalize=0[mix]"
-    )
-    if normalize:
-        chains.append(
-            f"[mix]loudnorm=I=-16:TP=-1.5:LRA=11:print_format=summary,"
-            f"alimiter=limit=0.95[aout]"
-        )
-        normalization = "loudnorm=-16LUFS+alimiter-0.95"
-    else:
-        chains.append("[mix]anull[aout]")
-        normalization = None
 
     filter_complex = ";".join(chains)
     command = [

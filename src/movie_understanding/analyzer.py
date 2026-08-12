@@ -1,0 +1,107 @@
+"""MovieAnalyzer — transforms raw artifacts into a structured movie index.
+
+Pipeline stage input:  ``transcripts/transcript.json`` + ``scenes/scene_index.json``
+Pipeline stage output: ``movie_index.json`` + ``semantic_index.json``
+
+``movie_index.json``::
+
+    {
+      "project_id", "source_path", "movie": {"title", "duration_sec"},
+      "scenes": [ {scene_id, start_sec, end_sec, transcript, story: {...}} ],
+      "characters": [...], "events": [...],
+      "provenance": {"scene_enricher": "heuristic", "semantic_method": "tfidf"}
+    }
+"""
+import json
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from movie_understanding import movie_memory
+from movie_understanding.character_analyzer import build_character_index
+from movie_understanding.event_index import build_event_index
+from movie_understanding.scene_analyzer import HeuristicSceneEnricher, SceneEnricher
+from movie_understanding.semantic_index import SemanticIndex
+
+
+def _load_scene_index(project_dir: Path) -> List[dict]:
+    scene_index = movie_memory.load_json(project_dir, "scenes/scene_index.json")
+    if scene_index is None:
+        scene_index = movie_memory.load_json(project_dir, "scenes/scene_cards.json")
+    if scene_index is None:
+        return []
+    if isinstance(scene_index, dict):
+        scene_index = scene_index.get("scenes", [])
+    return scene_index if isinstance(scene_index, list) else []
+
+
+def _load_transcript_segments(project_dir: Path) -> List[dict]:
+    transcript = movie_memory.load_json(project_dir, "transcripts/transcript.json", {})
+    return transcript.get("segments", []) if isinstance(transcript, dict) else []
+
+
+class MovieAnalyzer:
+    """Builds the structured movie index from existing pipeline artifacts."""
+
+    def __init__(self, scene_enricher: Optional[SceneEnricher] = None,
+                 embedder=None):
+        self.scene_enricher = scene_enricher or HeuristicSceneEnricher()
+        self.embedder = embedder
+
+    def analyze(self, project_dir: Path) -> dict:
+        project_dir = Path(project_dir)
+        meta = movie_memory.load_json(project_dir, "project_meta.json", {})
+        scenes = _load_scene_index(project_dir)
+        segments = _load_transcript_segments(project_dir)
+
+        enriched = [
+            self.scene_enricher.enrich(scene, segments)
+            for scene in scenes
+        ]
+
+        semantic = SemanticIndex(self.embedder)
+        semantic.build(enriched)
+
+        characters = build_character_index(scenes, segments)
+        events = build_event_index(scenes, segments)
+        duration = max(
+            [float(s.get("end_sec", 0.0)) for s in scenes] + [0.0]
+        ) if scenes else 0.0
+
+        movie_index = {
+            "project_id": meta.get("project_id") or project_dir.name,
+            "source_path": meta.get("source_path"),
+            "movie": {
+                "title": meta.get("title") or project_dir.name,
+                "duration_sec": round(duration, 3),
+            },
+            "scenes": enriched,
+            "characters": characters,
+            "events": events,
+            "scene_character_map": _scene_character_map(enriched),
+            "provenance": {
+                "scene_enricher": self.scene_enricher.name,
+                "semantic_method": "tfidf" if self.embedder is None else "embedder",
+                "word_level_timestamps": _has_word_timestamps(segments),
+            },
+        }
+
+        movie_memory.save_movie_index(project_dir, movie_index)
+        movie_memory.save_semantic_index(project_dir, semantic.to_dict())
+        return movie_index
+
+
+def _scene_character_map(enriched: List[dict]) -> Dict[str, List[str]]:
+    return {
+        e["scene_id"]: e["story"]["characters"]
+        for e in enriched
+    }
+
+
+def _has_word_timestamps(segments: List[dict]) -> bool:
+    return any(seg.get("words") for seg in (segments or []))
+
+
+def build_movie_index(project_dir: Path, scene_enricher: Optional[SceneEnricher] = None,
+                      embedder=None) -> dict:
+    """Convenience entry point (mirrors other pipeline stage entry points)."""
+    return MovieAnalyzer(scene_enricher=scene_enricher, embedder=embedder).analyze(project_dir)

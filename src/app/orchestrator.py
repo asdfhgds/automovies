@@ -191,6 +191,13 @@ def start_pipeline(project_id: str):
     manifest['director_real_generation'] = director_real
     manifest['director_seconds'] = round(time.monotonic() - t0, 2)
 
+    # Editorial mode: the AI "editor" turns the thesis into an evidence-driven
+    # cut (editorial_plan.json -> editorial script -> editorial timeline ->
+    # excerpt extraction -> editorial render). Enabled with EDITORIAL_MODE=true.
+    editorial_mode = os.getenv('EDITORIAL_MODE', 'false').lower() == 'true'
+    editorial_plan_built = False
+    editorial_timeline_built = False
+
     # Free GPU memory between heavy stages. The Qwen model stays cached (class-level
     # cache), so the script stage can reuse it when the model name matches and we
     # don't load two model copies into a 16GB T4.
@@ -200,6 +207,49 @@ def start_pipeline(project_id: str):
             torch.cuda.empty_cache()
     except Exception:
         pass
+
+    # Phase: EDITORIAL planning + evidence-aligned script + timeline.
+    # Requires the movie index (transcripts + scenes already built above).
+    if editorial_mode:
+        try:
+            from movie_understanding.analyzer import MovieAnalyzer
+            MovieAnalyzer().analyze(project_dir)
+            print("Editorial: movie_index.json + semantic_index.json built")
+        except Exception as e:
+            raise RuntimeError(f"Editorial movie analysis failed: {e}") from e
+
+        try:
+            from editorial.director import create_editorial_plan
+            from editorial.script import build_editorial_script
+            from editorial.timeline import EditorialTimelineBuilder
+            from movie_understanding import movie_memory
+
+            plan = create_editorial_plan(
+                project_dir,
+                creative_task=os.getenv('EDITORIAL_CREATIVE_TASK', ''),
+                target_sec=float(os.getenv('EDITORIAL_TARGET_SEC', '90')))
+            movie_index = movie_memory.load_movie_index(project_dir)
+            script = build_editorial_script(project_dir, plan, movie_index)
+            editorial_plan_built = True
+            print("Editorial: editorial_plan.json + script.json (evidence-aligned) written")
+
+            meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
+            src = meta.get('source_path') or None
+            builder = EditorialTimelineBuilder(source_path=src)
+            timeline = builder.build(project_dir, plan, script)
+            editorial_timeline_built = True
+            editorial_timeline_built = True
+            n_video = sum(
+                len(seg.get('video', []))
+                for seg in timeline.get('segments', []))
+            print(f"Editorial: timeline wrote {n_video} excerpt clip(s)")
+        except Exception as e:
+            if strict:
+                raise RuntimeError(f"Editorial planning failed in strict mode: {e}") from e
+            print(f"Editorial planning failed: {e}")
+    manifest['editorial_mode'] = editorial_mode
+    manifest['editorial_plan_built'] = editorial_plan_built
+    manifest['editorial_timeline_built'] = editorial_timeline_built
 
     # Phase: Scene ranking (use director thesis if available). Runs BEFORE script
     # generation because both the Qwen and deterministic writers read the
@@ -243,79 +293,41 @@ def start_pipeline(project_id: str):
         print(f"Scene selection failed: {e}")
         raise
 
-    # Phase: Script generation (Qwen when strict or configured, else deterministic)
-    script_provider = 'deterministic'
-    script_model = None
-    script_device = None
-    script_real = False
-    t0 = time.monotonic()
-    try:
-        sp = os.getenv('SCRIPT_PROVIDER', 'mock').lower()
-        use_qwen_script = strict or sp == 'qwen'
-        if use_qwen_script:
-            from script.qwen_writer import generate_script_qwen
-            model = os.getenv('SCRIPT_MODEL') or 'Qwen/Qwen3-4B-Instruct-2507'
-            device = os.getenv('SCRIPT_DEVICE', 'auto')
-            if strict and device in ('auto', 'cpu'):
-                require_cuda()
-                device = 'cuda'
-            # If the script wants a different model than the one cached from the
-            # director stage, drop the cache first to avoid holding both in VRAM.
-            if director_real and model != director_model:
-                try:
-                    from director.providers.qwen import QwenProvider
-                    QwenProvider.release_model()
-                    print(f"[SCRIPT] Dropping cached director model; loading {model}")
-                except Exception as e:
-                    print(f"[SCRIPT] Could not release director model: {e}")
-            result = generate_script_qwen(project_dir, model=model, device=device)
-            script_provider = 'qwen'
-            script_model = result.get('script_model', model)
-            script_device = result.get('script_device', device)
-            script_real = True
-            manifest['script_qwen_load_time_sec'] = result.get('qwen_load_time_sec')
-            manifest['script_qwen_generation_time_sec'] = result.get('qwen_generation_time_sec')
-        else:
-            from script.writer import generate_script
-            generate_script(project_dir)
-            script_provider = 'deterministic'
-        if strict and not script_real:
-            raise RuntimeError(
-                "Strict GPU validation requires a Qwen-generated script, but the "
-                "script stage did not use Qwen. Refusing deterministic script fallback."
-            )
-    except Exception as e:
-        if strict:
-            raise RuntimeError(f"Script generation failed in strict mode: {e}") from e
-        print(f"Script generation failed: {e}")
+    # Phase: Script generation (Qwen when strict or configured, else deterministic).
+    # In editorial mode the evidence-aligned script was already written by the
+    # editorial stage above -> keep it and record provenance.
+    if editorial_plan_built:
+        script_real = bool(director_real)
+        script_provider = 'editorial'
+        script_model = director_model
+        script_device = director_device
+        print("Editorial: script.json from editorial planner (thesis from creative director)")
+    else:
+        _run_script_stage(project_dir, strict, director_real, director_model, manifest)
 
-    manifest['script_provider'] = script_provider
-    manifest['script_model'] = script_model
-    manifest['script_device'] = script_device
-    manifest['script_real_generation'] = script_real
-    manifest['script_seconds'] = round(time.monotonic() - t0, 2)
-
-    # Phase: Clip extraction (one per selected scene)
-    try:
-        from editor.clip_extractor import extract_clip
-        selections = json.loads(sel_path.read_text(encoding='utf-8'))
-        meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
-        source = meta.get('source_path')
-        if not source:
-            raise RuntimeError('No source video registered for clip extraction')
-        out_dir = project_dir / 'assets' / 'scenes'
-        out_dir.mkdir(parents=True, exist_ok=True)
-        extracted = []
-        for sel in selections:
-            out_file = out_dir / f"{sel.get('scene_id')}.mp4"
-            extract_clip(source, sel.get('start_sec'), sel.get('end_sec'), str(out_file))
-            extracted.append(str(out_file))
-            print(f"Extracted scene clip -> {out_file}")
-        if not extracted:
-            raise RuntimeError('No scene clips were extracted')
-    except Exception as e:
-        print(f"Clip extraction failed: {e}")
-        raise
+    # Phase: Clip extraction (one per selected scene). The editorial timeline
+    # extracts its own excerpt clips, so this is only needed for the plain cut.
+    if not editorial_timeline_built:
+        try:
+            from editor.clip_extractor import extract_clip
+            selections = json.loads(sel_path.read_text(encoding='utf-8'))
+            meta = json.loads(meta_path.read_text(encoding='utf-8')) if meta_path.exists() else {}
+            source = meta.get('source_path')
+            if not source:
+                raise RuntimeError('No source video registered for clip extraction')
+            out_dir = project_dir / 'assets' / 'scenes'
+            out_dir.mkdir(parents=True, exist_ok=True)
+            extracted = []
+            for sel in selections:
+                out_file = out_dir / f"{sel.get('scene_id')}.mp4"
+                extract_clip(source, sel.get('start_sec'), sel.get('end_sec'), str(out_file))
+                extracted.append(str(out_file))
+                print(f"Extracted scene clip -> {out_file}")
+            if not extracted:
+                raise RuntimeError('No scene clips were extracted')
+        except Exception as e:
+            print(f"Clip extraction failed: {e}")
+            raise
 
     # Phase: Visual generation
     try:
@@ -372,8 +384,13 @@ def start_pipeline(project_id: str):
 
     # Phase: Assembly
     try:
-        from editor.ffmpeg_editor import assemble
-        assemble(project_dir)
+        if editorial_timeline_built:
+            from editorial.render import assemble_editorial
+            assemble_editorial(project_dir)
+            print("Editorial: assembled renders/final_render.mp4 via editorial renderer")
+        else:
+            from editor.ffmpeg_editor import assemble
+            assemble(project_dir)
     except Exception as e:
         print(f"Assembly failed: {e}")
         if strict:
@@ -400,3 +417,60 @@ def start_pipeline(project_id: str):
 def _director_config():
     from director.provider_factory import get_director_config_from_env
     return get_director_config_from_env()
+
+
+def _run_script_stage(project_dir: Path, strict: bool, director_real: bool,
+                      director_model: str, manifest: dict) -> None:
+    """Run the legacy script generation stage (non-editorial path)."""
+    import time as _time
+
+    script_provider = 'deterministic'
+    script_model = None
+    script_device = None
+    script_real = False
+    t0 = _time.monotonic()
+    try:
+        sp = os.getenv('SCRIPT_PROVIDER', 'mock').lower()
+        use_qwen_script = strict or sp == 'qwen'
+        if use_qwen_script:
+            from script.qwen_writer import generate_script_qwen
+            model = os.getenv('SCRIPT_MODEL') or 'Qwen/Qwen3-4B-Instruct-2507'
+            device = os.getenv('SCRIPT_DEVICE', 'auto')
+            if strict and device in ('auto', 'cpu'):
+                require_cuda()
+                device = 'cuda'
+            # If the script wants a different model than the one cached from the
+            # director stage, drop the cache first to avoid holding both in VRAM.
+            if director_real and model != director_model:
+                try:
+                    from director.providers.qwen import QwenProvider
+                    QwenProvider.release_model()
+                    print(f"[SCRIPT] Dropping cached director model; loading {model}")
+                except Exception as e:
+                    print(f"[SCRIPT] Could not release director model: {e}")
+            result = generate_script_qwen(project_dir, model=model, device=device)
+            script_provider = 'qwen'
+            script_model = result.get('script_model', model)
+            script_device = result.get('script_device', device)
+            script_real = True
+            manifest['script_qwen_load_time_sec'] = result.get('qwen_load_time_sec')
+            manifest['script_qwen_generation_time_sec'] = result.get('qwen_generation_time_sec')
+        else:
+            from script.writer import generate_script
+            generate_script(project_dir)
+            script_provider = 'deterministic'
+        if strict and not script_real:
+            raise RuntimeError(
+                "Strict GPU validation requires a Qwen-generated script, but the "
+                "script stage did not use Qwen. Refusing deterministic script fallback."
+            )
+    except Exception as e:
+        if strict:
+            raise RuntimeError(f"Script generation failed in strict mode: {e}") from e
+        print(f"Script generation failed: {e}")
+
+    manifest['script_provider'] = script_provider
+    manifest['script_model'] = script_model
+    manifest['script_device'] = script_device
+    manifest['script_real_generation'] = script_real
+    manifest['script_seconds'] = round(_time.monotonic() - t0, 2)
