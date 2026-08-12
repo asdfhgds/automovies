@@ -87,6 +87,15 @@ src/
 │   └── scenes/
 │       ├── detector.py
 │       └── indexer.py
+├── movie_understanding/          (Movie Intelligence Layer)
+│   ├── analyzer.py               MovieAnalyzer -> movie_index.json
+│   ├── scene_analyzer.py         SceneEnricher interface + heuristic
+│   ├── vision_enricher.py        Qwen3VLEnricher (Qwen2.5-VL/Qwen3-VL)
+│   ├── keyframes.py              FFmpeg per-scene keyframe extraction
+│   ├── enrich_factory.py         VISION_ENRICHER env selection + strict guard
+│   ├── semantic_index.py         TF-IDF evidence retrieval index
+│   ├── character_analyzer.py / event_index.py / text_utils.py
+│   └── movie_memory.py           persistence
 ├── generation/
 │   ├── base.py (Provider interfaces)
 │   ├── mock.py (Mock implementations)
@@ -332,12 +341,16 @@ providers:
 
 ## Known Limitations
 
-1. **Keyword-based ranking** - the base ranker is deterministic lexical scoring; evidence tags are now used by selection, but the base ranker still needs an LLM-aware pass
-2. **Small-model fidelity** - Qwen3-4B occasionally echoes prompt examples or produces loose JSON; guarded by placeholder detection, retry, and a plain-text fallback, but a 7B+ model would be more reliable
-3. **TTS emotion is approximated** - Kokoro maps tone/emotion to fixed-personality voices and pace/energy to speed; Chatterbox/Qwen3-TTS report emotion/pace as unsupported in the released packages. True expressive control is not yet available
-4. **Real TTS requires GPU** - providers skip CPU synthesis by design (`cpu_skipped`); a CUDA box is required for the benchmark/pipeline runs
-5. **No human feedback loop** - one-shot generation only
-6. **No cost tracking** - no visibility into token usage
+1. **Vision fields need GPU + model** - `location`/`actions`/`visual_description`/
+   `themes`/`mood` are only filled by `VISION_ENRICHER=qwen3vl` on CUDA; the
+   heuristic enricher leaves them `None` + provenance-flagged by design. The
+   semantic index also does not yet *consume* those fields for evidence retrieval.
+2. **Keyword-based ranking** - the base ranker is deterministic lexical scoring; evidence tags are now used by selection, but the base ranker still needs an LLM-aware pass
+3. **Small-model fidelity** - Qwen3-4B occasionally echoes prompt examples or produces loose JSON; guarded by placeholder detection, retry, and a plain-text fallback, but a 7B+ model would be more reliable
+4. **TTS emotion is approximated** - Kokoro maps tone/emotion to fixed-personality voices and pace/energy to speed; Chatterbox/Qwen3-TTS report emotion/pace as unsupported in the released packages. True expressive control is not yet available
+5. **Real TTS requires GPU** - providers skip CPU synthesis by design (`cpu_skipped`); a CUDA box is required for the benchmark/pipeline runs
+6. **No human feedback loop** - one-shot generation only
+7. **No cost tracking** - no visibility into token usage
 
 ## Test Commands
 
@@ -369,6 +382,11 @@ python src/main.py run --project-id <id>
 - ✅ Movie intelligence layer (`src/movie_understanding/`): analyzer, scene
   enricher (summary/topics/dialogue/characters/tone), character index, event
   index, semantic index (TF-IDF), movie memory persistence
+- ✅ **Vision scene enrichment (Qwen3-VL)**: `keyframes.py` (FFmpeg per-scene
+  frames), `Qwen3VLEnricher` (lazy shared Qwen2.5-VL/Qwen3-VL, 4-bit option,
+  fills location/actions/visual_description/themes/mood with per-field
+  `provenance=qwen3vl`), `enrich_factory.py` env selection, `REQUIRE_REAL_VISION`
+  strict mode, wired into `MovieAnalyzer(attach_keyframes=True)` + orchestrator
 - ✅ Editorial planning (`src/editorial/`): EditorialPlan models,
   heuristic planner (hook/thesis/evidence/close), evidence retrieval
   (semantic + lexical + dialogue), evidence-aligned script with short captions,
@@ -382,9 +400,10 @@ python src/main.py run --project-id <id>
 - ✅ Fixed: editorial renderer now applies `fps=` to every clip so `xfade`
   inputs share a timebase (mixed frame-rate sources no longer fail with
   "First input link timebase ... do not match ... xfade timebase")
-- ✅ Local E2E: 138 tests pass; editorial orchestrator test proves all artifacts
-- ⏳ GPU: `notebooks/colab_editorial_gpu.ipynb` ready — real Qwen director,
-  real TTS, editorial render on a user-supplied movie
+- ✅ Local E2E: 164 tests pass (26 new vision tests); editorial orchestrator test proves all artifacts
+- ⏳ GPU: `notebooks/colab_editorial_gpu.ipynb` + `notebooks/colab_vision_gpu.ipynb`
+  ready — real Qwen director, real Qwen3-VL scene enrichment, real TTS on a
+  user-supplied movie
 
 ### 1. Timeline-Based Rendering Integration
 - ✅ Connect existing orchestrator to timeline system
@@ -533,10 +552,43 @@ grep -A 20 "profiles:" configs/profiles.yaml
   - `notebooks/colab_real_movie_tts.ipynb` — replaced by editorial GPU notebook
   - Documentation: `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`,
 
+## Files Changed This Session (Vision Scene Enrichment Milestone)
+
+- **Created**:
+  - `src/movie_understanding/keyframes.py` — FFmpeg keyframe extraction per
+    scene window (`extract_scene_keyframes`, `extract_all_scene_keyframes`,
+    `snapshot_frame`), no OpenCV dependency
+  - `src/movie_understanding/vision_enricher.py` — `Qwen3VLEnricher`:
+    lazy shared Qwen2.5-VL/Qwen3-VL load (AutoProcessor+AutoModel, SDPA,
+    device_map=auto, 4-bit NF4 via `VISION_DTYPE`), chat-template image
+    handling with processor/tokenizer/decoder API fallback, JSON repair,
+    fills location/actions/visual_description/themes/mood with per-field
+    `provenance=qwen3vl`; degrades to heuristic or raises under strict
+  - `src/movie_understanding/enrich_factory.py` — env-driven
+    `VISION_ENRICHER`/`VISION_MODEL`/`VISION_DEVICE`/`VISION_DTYPE`/
+    `VISION_MAX_FRAMES` + `require_real_vision` strict guard
+  - `scripts/colab_vision_setup.sh` — idempotent Qwen-VL transformers setup
+  - `notebooks/colab_vision_gpu.ipynb` — 10-cell GPU validation notebook for
+    the vision layer (keyframes → real Qwen3-VL → vision scene cards + QA)
+  - `tests/test_vision_enrichment.py` — 26 tests (keyframes, JSON repair,
+    fake-VL enrich/degrade/strict, analyzer integration, factory/env)
+
+- **Modified**:
+  - `src/movie_understanding/analyzer.py` — `attach_keyframes=` option,
+    `create_scene_enricher_from_env()` default enricher, provenance
+    `keyframes` + `scene_enricher` name
+  - `src/movie_understanding/__init__.py` — export enricher factory
+  - `src/movie_understanding/scene_analyzer.py` — `mood` field in story schema
+  - `src/utils/strict.py` — `REQUIRE_REAL_VISION` + `require_real_vision`
+  - `src/app/orchestrator.py` — vision enricher + keyframe attachment in the
+    editorial movie-analysis stage
+  - `configs/app.yaml`, `configs/profiles.yaml` — `vision:` provider block
+  - Documentation: `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`, `NEXT_MILESTONE.md`
+
 ## Test Results
 
 ```
-138 fast tests ............................ PASS (incl. editorial + movie_understanding suites)
+164 fast tests ............................ PASS (incl. editorial, movie_understanding, vision suites)
 ```
   - 26 Qwen provider tests (incl. placeholder-guard + plain-text fallback)
   - 10 Creative director tests
@@ -547,13 +599,14 @@ grep -A 20 "profiles:" configs/profiles.yaml
   - 3 TTS adapter tests (meta + narration props + strict rejection)
   - 2 TTS benchmark tests (mock baseline + unavailable-provider reporting)
   - 5 Audio-mix render-command tests (ducking/loudnorm/limiter/srt/silent clips)
+  - 26 Vision enrichment tests (keyframes, JSON repair, fake-VL enrich/degrade/strict,
+    analyzer integration, factory/env selection)
   - Multi-clip rendering test (FFmpeg) — now with film ducking + subtitles
   - Existing ranking / selection / extraction / timeline tests
 2 skipped (real-TTS GPU tests — gated behind STUDIO_RUN_REAL_TESTS=1 + CUDA)
 11 deselected (slow / llm_integration)
 ─────────────────────────────────────────
-TOTAL: 112 passing, 0 failures, ~50s runtime
-```
+TOTAL: 164 passing, 0 failures
 
 ## Status for Handoff
 
@@ -572,9 +625,15 @@ TOTAL: 112 passing, 0 failures, ~50s runtime
 ✅ **Cinematic Audio Mix**: film + music ducking, loudnorm, true-peak limiter, burned subtitles
 ✅ **Local E2E Render Validated**: mock-profile run produced a playable 29.6s MP4
    (H.264 1280x720 + AAC, subtitles burned, `no_clipping: true`, peak −2.9 dB)
+✅ **Qwen3-VL Vision Scene Enrichment**: `keyframes.py` + `Qwen3VLEnricher` +
+   `enrich_factory.py` + `REQUIRE_REAL_VISION` strict mode; fills
+   location/actions/visual_description/themes/mood with per-field provenance;
+   26 tests; wired into `MovieAnalyzer(attach_keyframes=True)` + orchestrator
 ✅ **Colab GPU Validation (LLM)**: PASSED on a real T4 with Qwen/Qwen3-4B-Instruct-2507
    (real concepts + narration, no OOM, no placeholder echo)
-✅ **Documentation**: Profiles, provider system, configuration, Colab flow, TTS
+✅ **Documentation**: Profiles, provider system, configuration, Colab flow, TTS, vision
+⏳ **Real Qwen3-VL GPU run**: notebook `colab_vision_gpu.ipynb` + `colab_vision_setup.sh`
+   ready; needs a user-supplied legally-owned movie to execute on a T4/A100
 ⏳ **Real-Movie + Real-TTS GPU run**: notebook `colab_real_movie_tts.ipynb` ready;
    needs a user-supplied legally-owned movie to execute on a T4/A100
 ⏳ **Image/Video Generation**: Mocks complete, integration pending

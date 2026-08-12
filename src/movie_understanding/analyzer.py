@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 
 from movie_understanding import movie_memory
 from movie_understanding.character_analyzer import build_character_index
+from movie_understanding.enrich_factory import create_scene_enricher_from_env
 from movie_understanding.event_index import build_event_index
 from movie_understanding.scene_analyzer import HeuristicSceneEnricher, SceneEnricher
 from movie_understanding.semantic_index import SemanticIndex
@@ -43,15 +44,30 @@ class MovieAnalyzer:
     """Builds the structured movie index from existing pipeline artifacts."""
 
     def __init__(self, scene_enricher: Optional[SceneEnricher] = None,
-                 embedder=None):
-        self.scene_enricher = scene_enricher or HeuristicSceneEnricher()
+                 embedder=None, attach_keyframes: bool = False,
+                 max_frames: int = 1):
+        self.scene_enricher = scene_enricher or create_scene_enricher_from_env()
         self.embedder = embedder
+        self.attach_keyframes = attach_keyframes
+        self.max_frames = max_frames
 
     def analyze(self, project_dir: Path) -> dict:
         project_dir = Path(project_dir)
         meta = movie_memory.load_json(project_dir, "project_meta.json", {})
         scenes = _load_scene_index(project_dir)
         segments = _load_transcript_segments(project_dir)
+
+        if self.attach_keyframes and scenes:
+            from movie_understanding.keyframes import extract_all_scene_keyframes
+            kf_dir = project_dir / "scenes" / "keyframes"
+            frames = extract_all_scene_keyframes(
+                meta.get("source_path"), scenes, kf_dir,
+                max_frames_per_scene=self.max_frames,
+            )
+            for scene in scenes:
+                sid = scene.get("scene_id")
+                if sid:
+                    scene["key_frames"] = frames.get(sid) or []
 
         enriched = [
             self.scene_enricher.enrich(scene, segments)
@@ -82,6 +98,7 @@ class MovieAnalyzer:
                 "scene_enricher": self.scene_enricher.name,
                 "semantic_method": "tfidf" if self.embedder is None else "embedder",
                 "word_level_timestamps": _has_word_timestamps(segments),
+                "keyframes": bool(self.attach_keyframes),
             },
         }
 
@@ -102,6 +119,12 @@ def _has_word_timestamps(segments: List[dict]) -> bool:
 
 
 def build_movie_index(project_dir: Path, scene_enricher: Optional[SceneEnricher] = None,
-                      embedder=None) -> dict:
+                      embedder=None, attach_keyframes: bool = False,
+                      max_frames: int = 1) -> dict:
     """Convenience entry point (mirrors other pipeline stage entry points)."""
-    return MovieAnalyzer(scene_enricher=scene_enricher, embedder=embedder).analyze(project_dir)
+    return MovieAnalyzer(
+        scene_enricher=scene_enricher,
+        embedder=embedder,
+        attach_keyframes=attach_keyframes,
+        max_frames=max_frames,
+    ).analyze(project_dir)

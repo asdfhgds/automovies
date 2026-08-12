@@ -213,7 +213,11 @@ def start_pipeline(project_id: str):
     if editorial_mode:
         try:
             from movie_understanding.analyzer import MovieAnalyzer
-            MovieAnalyzer().analyze(project_dir)
+            vision_requested = os.getenv('VISION_ENRICHER', 'heuristic').lower() == 'qwen3vl'
+            MovieAnalyzer(
+                attach_keyframes=vision_requested,
+                max_frames=int(os.getenv('VISION_MAX_FRAMES', '1')),
+            ).analyze(project_dir)
             print("Editorial: movie_index.json + semantic_index.json built")
         except Exception as e:
             raise RuntimeError(f"Editorial movie analysis failed: {e}") from e

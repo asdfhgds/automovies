@@ -4,7 +4,7 @@ Turns a bare scene (``scene_id / start_sec / end_sec / transcript``) into a
 story-bearing unit the editorial director can reason about:
 
 ``story = {summary, topics, dialogue, characters, location, actions,
-           visual_description, emotional_tone, themes, provenance}``
+           visual_description, emotional_tone, themes, mood, provenance}``
 
 Everything is deterministic-first. Fields that genuinely require vision or an
 LLM (location, actions, visual description, real themes) are left ``None`` and
@@ -112,6 +112,7 @@ class HeuristicSceneEnricher(SceneEnricher):
                 "visual_description": None,
                 "emotional_tone": tone,
                 "themes": None,
+                "mood": None,
                 "provenance": {
                     "summary": "transcript",
                     "topics": "transcript_frequency",
@@ -122,6 +123,7 @@ class HeuristicSceneEnricher(SceneEnricher):
                     "visual_description": "unavailable (vision/LLM)",
                     "emotional_tone": "transcript_lexicon",
                     "themes": "unavailable (LLM)",
+                    "mood": "unavailable (vision/LLM)",
                 },
             },
         }

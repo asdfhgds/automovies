@@ -11,8 +11,28 @@
   editorial timeline (excerpts), editorial FFmpeg renderer
 - ✅ Orchestrator `EDITORIAL_MODE=true` wired end-to-end; QC covers the
   editorial cut
-- ✅ 138 tests pass locally (editorial + movie-understanding suites added)
-- ⏳ GPU validation notebook: `notebooks/colab_editorial_gpu.ipynb`
+- ✅ 164 tests pass locally (vision + editorial + movie-understanding suites added)
+- ⏳ GPU validation notebooks: `colab_editorial_gpu.ipynb`, `colab_vision_gpu.ipynb`
+
+### Vision Scene Enrichment (Qwen3-VL) — Built + Tested, GPU Run Pending
+- ✅ `src/movie_understanding/keyframes.py` — FFmpeg keyframe extraction per
+  scene window (no OpenCV dependency; window validation, missing-source errors)
+- ✅ `src/movie_understanding/vision_enricher.py` — `Qwen3VLEnricher`
+  implementing the `SceneEnricher` interface: lazy Qwen2.5-VL/Qwen3-VL load
+  (shared class-level cache), GPU-optional, 4-bit NF4, SDPA, chat-template
+  image handling with processor API fallback; fills `location` / `actions` /
+  `visual_description` / `themes` / `mood` with per-field `provenance=qwen3vl`;
+  degrades to heuristic (fields `None` + `unavailable(<reason>)`) without GPU
+  or keyframes, or raises under `REQUIRE_REAL_VISION=true`
+- ✅ `src/movie_understanding/enrich_factory.py` — env-driven selection
+  (`VISION_ENRICHER`, `VISION_MODEL`, `VISION_DEVICE`, `VISION_DTYPE`,
+  `VISION_MAX_FRAMES`) + `require_real_vision` strict guard
+- ✅ `MovieAnalyzer(attach_keyframes=True)` + orchestrator editorial path now
+  run the vision enricher (`VISION_ENRICHER=qwen3vl`)
+- ✅ 26 vision tests (keyframes, JSON repair, fake-VL enrich/degrade/strict,
+  analyzer integration, factory/env); 164 total passing
+- ✅ `scripts/colab_vision_setup.sh` + `notebooks/colab_vision_gpu.ipynb`
+- ⏳ Real Qwen3-VL run on a T4 with a user-supplied movie (pending)
 
 ### Foundation: Movie Understanding (Real & Tested)
 - ✅ **Transcription**: Whisper/WhisperX with word-level timestamps
