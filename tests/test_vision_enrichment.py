@@ -188,6 +188,9 @@ class _DispatchedModel:
     def eval(self):
         return self
 
+    def generate(self, **k):
+        return None
+
     def to(self, *a, **k):
         if self._to_raises:
             raise RuntimeError("You can't move a model that has some modules offloaded to cpu or disk.")
@@ -198,6 +201,26 @@ class _FakeProcessor:
     pass
 
 
+def _make_fake_transformers(model_cls, from_pretrained=None):
+    """transformers stub with AutoProcessor + AutoModelForCausalLM (+ AutoModel
+    fallback), so the real CUDA/torch stack is never touched."""
+    import types
+
+    from_pretrained = from_pretrained or (lambda *a, **k: model_cls())
+    fake_transformers = types.ModuleType("transformers")
+    fake_transformers.AutoProcessor = type(
+        "AutoProcessor", (), {"from_pretrained": staticmethod(lambda *a, **k: _FakeProcessor())}
+    )
+    for name in ("AutoModelForCausalLM", "AutoModel"):
+        setattr(
+            fake_transformers, name, type(
+                name, (),
+                {"from_pretrained": staticmethod(from_pretrained)},
+            )
+        )
+    return fake_transformers
+
+
 def test_initialize_never_calls_to_on_dispatched_model(monkeypatch):
     import movie_understanding.vision_enricher as ve
 
@@ -206,18 +229,13 @@ def test_initialize_never_calls_to_on_dispatched_model(monkeypatch):
     monkeypatch.setattr(ve, "_gpu_available", lambda: True)
 
     import sys
-    import types
 
-    fake_transformers = types.ModuleType("transformers")
-    fake_transformers.AutoProcessor = type(
-        "AutoProcessor", (), {"from_pretrained": staticmethod(lambda *a, **k: _FakeProcessor())}
-    )
-    fake_transformers.AutoModel = type(
-        "AutoModel", (),
-        {"from_pretrained": staticmethod(lambda *a, **k: _DispatchedModel(to_raises=True))},
+    fake_transformers = _make_fake_transformers(
+        _DispatchedModel,
+        from_pretrained=lambda *a, **k: _DispatchedModel(to_raises=True),
     )
 
-    # Sub in a fake transformers module (AutoProcessor/AutoModel only) so the
+    # Sub in a fake transformers module (AutoProcessor/AutoModel* only) so the
     # real CUDA/torch stack is never touched.
     import transformers as _real_tf
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
@@ -240,15 +258,10 @@ def test_initialize_calls_to_when_not_dispatched(monkeypatch):
     monkeypatch.setattr(ve, "_gpu_available", lambda: False)
 
     import sys
-    import types
 
-    fake_transformers = types.ModuleType("transformers")
-    fake_transformers.AutoProcessor = type(
-        "AutoProcessor", (), {"from_pretrained": staticmethod(lambda *a, **k: _FakeProcessor())}
-    )
-    fake_transformers.AutoModel = type(
-        "AutoModel", (),
-        {"from_pretrained": staticmethod(lambda *a, **k: _DispatchedModel(to_raises=False))},
+    fake_transformers = _make_fake_transformers(
+        _DispatchedModel,
+        from_pretrained=lambda *a, **k: _DispatchedModel(to_raises=False),
     )
 
     import transformers as _real_tf

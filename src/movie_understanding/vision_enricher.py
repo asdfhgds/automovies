@@ -217,7 +217,7 @@ class Qwen3VLEnricher(SceneEnricher):
         _load_start = _time.monotonic()
         try:
             import torch
-            from transformers import AutoProcessor, AutoModel
+            from transformers import AutoProcessor, AutoModelForCausalLM
 
             device = self._resolve_device()
             cache_key = (self.model_name, device, str(self.dtype))
@@ -259,7 +259,21 @@ class Qwen3VLEnricher(SceneEnricher):
             if device == "cuda":
                 load_kwargs["device_map"] = "auto"
                 load_kwargs["attn_implementation"] = "sdpa"
-            self.model = AutoModel.from_pretrained(self.model_name, **load_kwargs)
+            # AutoModel returns the base Qwen*VLModel (no .generate); the
+            # conditional-generation wrapper comes from AutoModelForCausalLM.
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name, **load_kwargs
+                )
+            except Exception:
+                from transformers import AutoModel
+                self.model = AutoModel.from_pretrained(self.model_name, **load_kwargs)
+            if not hasattr(self.model, "generate"):
+                raise RuntimeError(
+                    f"{self.model_name} loaded as {type(self.model).__name__} "
+                    "without .generate(); a conditional-generation checkpoint "
+                    "is required"
+                )
             self.model.eval()
 
             # device_map="auto" already dispatched the model (accelerate hooks,
