@@ -36,12 +36,22 @@ class SemanticIndex:
         self._idf = _idf(docs)
         self._entries = []
         for scene, doc in zip(enriched_scenes, docs):
+            story = scene.get("story", {})
             self._entries.append({
                 "scene_id": scene.get("scene_id"),
-                "summary": scene.get("story", {}).get("summary"),
-                "topics": scene.get("story", {}).get("topics", []),
+                "summary": story.get("summary"),
+                "topics": story.get("topics", []),
+                "location": story.get("location"),
+                "visual_description": story.get("visual_description"),
+                "actions": story.get("actions", []),
+                "objects": story.get("objects", []),
+                "visual_events": story.get("visual_events", []),
+                "emotional_cues": story.get("emotional_cues", []),
+                "themes": story.get("themes", []),
+                "cinematography": story.get("cinematography"),
+                "mood": story.get("mood"),
                 "dialogue_text": " ".join(
-                    d.get("text", "") for d in scene.get("story", {}).get("dialogue", [])
+                    d.get("text", "") for d in story.get("dialogue", [])
                 ),
                 "vector": _tfidf(doc, self._idf),
             })
@@ -55,7 +65,16 @@ class SemanticIndex:
             text = " ".join([
                 scene.get("transcript") or "",
                 story.get("summary") or "",
+                story.get("location") or "",
+                story.get("visual_description") or "",
+                story.get("mood") or "",
+                story.get("cinematography") or "",
                 " ".join(story.get("topics") or []),
+                " ".join(story.get("actions") or []),
+                " ".join(story.get("objects") or []),
+                " ".join(story.get("visual_events") or []),
+                " ".join(story.get("emotional_cues") or []),
+                " ".join(story.get("themes") or []),
                 " ".join(d.get("text", "") for d in story.get("dialogue", [])),
             ])
             docs.append(text_utils.tokenize(text))
@@ -122,6 +141,15 @@ class SemanticIndex:
                     "scene_id": e["scene_id"],
                     "topics": e["topics"],
                     "summary": e["summary"],
+                    "location": e["location"],
+                    "visual_description": e["visual_description"],
+                    "actions": e["actions"],
+                    "objects": e["objects"],
+                    "visual_events": e["visual_events"],
+                    "emotional_cues": e["emotional_cues"],
+                    "themes": e["themes"],
+                    "cinematography": e["cinematography"],
+                    "mood": e["mood"],
                 }
                 for e in self._entries
             ],

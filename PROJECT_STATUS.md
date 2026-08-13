@@ -1,10 +1,11 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: Editorial pipeline milestone — movie intelligence layer +
-evidence-driven editorial planning/script/timeline + editorial FFmpeg renderer.
-138 tests pass locally; a Colab GPU notebook
-(`notebooks/colab_editorial_gpu.ipynb`) is ready to prove the new editorial
-pipeline on a real movie (user-supplied, GPU run pending).
+**Last Updated**: Movie Intelligence validation milestone — provider dispatch
+fixed and proven on a real T4; vision schema extended (objects / visual events /
+emotional cues / cinematography / confidence); vision-aware retrieval; director
+artifacts (`scene_index_v2.json`, `movie_memory/`, movie-understanding report);
+retrieval-eval + temporal-probe tooling. 178 tests pass locally; the real-movie
+scene analysis run on Colab is ready and **pending execution**.
 
 ## Executive Summary
 
@@ -341,16 +342,25 @@ providers:
 
 ## Known Limitations
 
-1. **Vision fields need GPU + model** - `location`/`actions`/`visual_description`/
-   `themes`/`mood` are only filled by `VISION_ENRICHER=qwen3vl` on CUDA; the
-   heuristic enricher leaves them `None` + provenance-flagged by design. The
-   semantic index also does not yet *consume* those fields for evidence retrieval.
+1. **Vision fields need GPU + model** - `location`/`actions`/`objects`/
+   `visual_description`/`visual_events`/`emotional_cues`/`themes`/`mood`/
+   `cinematography`/`confidence` are only filled by `VISION_ENRICHER=qwen3vl` on
+   CUDA; the heuristic enricher leaves them `None` + provenance-flagged by
+   design. The semantic index *does* consume those fields for evidence
+   retrieval (TF-IDF over the vision words), but retrieval is word-match only —
+   not true embeddings.
 2. **Keyword-based ranking** - the base ranker is deterministic lexical scoring; evidence tags are now used by selection, but the base ranker still needs an LLM-aware pass
 3. **Small-model fidelity** - Qwen3-4B occasionally echoes prompt examples or produces loose JSON; guarded by placeholder detection, retry, and a plain-text fallback, but a 7B+ model would be more reliable
 4. **TTS emotion is approximated** - Kokoro maps tone/emotion to fixed-personality voices and pace/energy to speed; Chatterbox/Qwen3-TTS report emotion/pace as unsupported in the released packages. True expressive control is not yet available
 5. **Real TTS requires GPU** - providers skip CPU synthesis by design (`cpu_skipped`); a CUDA box is required for the benchmark/pipeline runs
 6. **No human feedback loop** - one-shot generation only
 7. **No cost tracking** - no visibility into token usage
+8. **T4 offload (7B-VL)** - `device_map="auto"` on a 16GB T4 offloads part of a
+   7B VL model to CPU: slower per-scene generation and peak VRAM below full
+   model. Documented, not hidden. `VISION_DTYPE=4bit` keeps it on-GPU.
+9. **Temporal localization is approximate** - `probe_temporal` orders events
+   with approx timestamps from evenly-spaced keyframes; it is not full-video
+   event detection and reports honestly when it cannot place an event in time.
 
 ## Test Commands
 
@@ -384,9 +394,20 @@ python src/main.py run --project-id <id>
   index, semantic index (TF-IDF), movie memory persistence
 - ✅ **Vision scene enrichment (Qwen3-VL)**: `keyframes.py` (FFmpeg per-scene
   frames), `Qwen3VLEnricher` (lazy shared Qwen2.5-VL/Qwen3-VL, 4-bit option,
-  fills location/actions/visual_description/themes/mood with per-field
-  `provenance=qwen3vl`), `enrich_factory.py` env selection, `REQUIRE_REAL_VISION`
-  strict mode, wired into `MovieAnalyzer(attach_keyframes=True)` + orchestrator
+  fills location/actions/objects/visual_description/visual_events/emotional_cues/
+  themes/mood/cinematography/confidence with per-field `provenance=qwen3vl`),
+  `enrich_factory.py` env selection, `REQUIRE_REAL_VISION` strict mode, wired
+  into `MovieAnalyzer(attach_keyframes=True)` + orchestrator
+- ✅ **Device-dispatch fix (real-T4 proven)**: never call `.model.to("cuda")`
+  after `device_map="auto"` dispatches the model — fixes "You can't move a
+  model that has some modules offloaded to cpu or disk"; regression-tested
+- ✅ **Vision-aware retrieval + director artifacts**: `SemanticIndex` consumes
+  vision fields; analyzer writes `scene_index_v2.json`, `movie_memory/` bundle,
+  and `reports/movie_understanding_report.md`
+- ✅ **Retrieval eval + temporal probe**: `scripts/evaluate_retrieval.py`
+  (queries → `reports/retrieval_evaluation.json`/`.md`, blank
+  GOOD/PARTIAL/WRONG fields) and `Qwen3VLEnricher.probe_temporal()` (ordered,
+  approx-timestamped visual events) — both covered by tests
 - ✅ Editorial planning (`src/editorial/`): EditorialPlan models,
   heuristic planner (hook/thesis/evidence/close), evidence retrieval
   (semantic + lexical + dialogue), evidence-aligned script with short captions,
@@ -400,10 +421,14 @@ python src/main.py run --project-id <id>
 - ✅ Fixed: editorial renderer now applies `fps=` to every clip so `xfade`
   inputs share a timebase (mixed frame-rate sources no longer fail with
   "First input link timebase ... do not match ... xfade timebase")
-- ✅ Local E2E: 164 tests pass (26 new vision tests); editorial orchestrator test proves all artifacts
-- ⏳ GPU: `notebooks/colab_editorial_gpu.ipynb` + `notebooks/colab_vision_gpu.ipynb`
-  ready — real Qwen director, real Qwen3-VL scene enrichment, real TTS on a
-  user-supplied movie
+- ✅ Local E2E: 178 tests pass (vision, artifacts, retrieval, editorial
+  orchestrator, movie-understanding suites); editorial orchestrator test proves all artifacts
+- ⏳ GPU: `notebooks/colab_vision_gpu.ipynb` ready — cells 7/7b/7c produce
+  every required artifact (`scene_index_v2.json`, `semantic_index.json`,
+  `movie_memory/`, `reports/movie_understanding_report.md`,
+  `reports/retrieval_evaluation.json`/`.md`, `reports/temporal_probe.json`,
+  preserving `transcripts/transcript.json` + `scenes/scene_index.json`) and run
+  the retrieval eval + temporal probe on a real movie. Execution pending.
 
 ### 1. Timeline-Based Rendering Integration
 - ✅ Connect existing orchestrator to timeline system
@@ -570,8 +595,9 @@ grep -A 20 "profiles:" configs/profiles.yaml
   - `scripts/colab_vision_setup.sh` — idempotent Qwen-VL transformers setup
   - `notebooks/colab_vision_gpu.ipynb` — 10-cell GPU validation notebook for
     the vision layer (keyframes → real Qwen3-VL → vision scene cards + QA)
-  - `tests/test_vision_enrichment.py` — 26 tests (keyframes, JSON repair,
-    fake-VL enrich/degrade/strict, analyzer integration, factory/env)
+  - `tests/test_vision_enrichment.py` — 33 tests (keyframes, JSON repair,
+    fake-VL enrich/degrade/strict, analyzer integration, factory/env, device-map
+    dispatch regression, temporal probe)
 
 - **Modified**:
   - `src/movie_understanding/analyzer.py` — `attach_keyframes=` option,
@@ -585,10 +611,40 @@ grep -A 20 "profiles:" configs/profiles.yaml
   - `configs/app.yaml`, `configs/profiles.yaml` — `vision:` provider block
   - Documentation: `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`, `NEXT_MILESTONE.md`
 
+## Files Changed This Session (Movie Intelligence Validation Prep)
+
+- **Created**:
+  - `src/movie_understanding/artifacts.py` — `scene_index_v2.json` (versioned
+    enriched scene index), `movie_memory/` bundle (index + scene v2 + semantic +
+    characters + events + manifest), `reports/movie_understanding_report.md`
+  - `scripts/evaluate_retrieval.py` — retrieval-evaluation harness: milestone
+    queries → `reports/retrieval_evaluation.json` + `.md` (blank
+    `human_assessment` GOOD/PARTIAL/WRONG fields)
+  - `tests/test_artifacts.py` — 10 tests (scene_index_v2, movie_memory bundle,
+    understanding report, analyzer emits artifacts, vision-field retrieval,
+    eval harness reports)
+
+- **Modified**:
+  - `src/movie_understanding/vision_enricher.py` — extended schema: `objects`,
+    `visual_events` (approx-timestamped), `emotional_cues`, `cinematography`,
+    `confidence` + provenance; added `probe_temporal()` (ordered events across N
+    keyframes, honest failure); device-map `.to()` guard fix
+  - `src/movie_understanding/scene_analyzer.py` — heuristic enricher now emits
+    the extended story schema (new fields `None` + `unavailable (vision/LLM)`)
+  - `src/movie_understanding/semantic_index.py` — corpus + `to_dict` now include
+    the vision fields so on-screen content is queryable
+  - `src/movie_understanding/analyzer.py` — writes `scene_index_v2.json` +
+    `movie_memory/` after every analyze
+  - `tests/test_vision_enrichment.py` — 28 tests (new-field assertions,
+    device-map regression, temporal probe)
+  - `notebooks/colab_vision_gpu.ipynb` — cells 7/7b/7c produce all artifacts,
+    run retrieval eval, run temporal probe; cell 8 shows new fields
+  - Documentation: `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`, `NEXT_MILESTONE.md`
+
 ## Test Results
 
 ```
-164 fast tests ............................ PASS (incl. editorial, movie_understanding, vision suites)
+178 fast tests ............................ PASS (incl. editorial, movie_understanding, vision, artifacts, retrieval suites)
 ```
   - 26 Qwen provider tests (incl. placeholder-guard + plain-text fallback)
   - 10 Creative director tests
@@ -599,20 +655,24 @@ grep -A 20 "profiles:" configs/profiles.yaml
   - 3 TTS adapter tests (meta + narration props + strict rejection)
   - 2 TTS benchmark tests (mock baseline + unavailable-provider reporting)
   - 5 Audio-mix render-command tests (ducking/loudnorm/limiter/srt/silent clips)
-  - 26 Vision enrichment tests (keyframes, JSON repair, fake-VL enrich/degrade/strict,
-    analyzer integration, factory/env selection)
+  - 33 Vision enrichment tests (keyframes, JSON repair, fake-VL enrich/degrade/strict,
+    analyzer integration, factory/env selection, device-map dispatch regression,
+    temporal probe)
+  - 10 Movie-intelligence artifact tests (scene_index_v2, movie_memory bundle,
+    understanding report, analyzer emits artifacts, vision-field retrieval,
+    eval harness reports)
   - Multi-clip rendering test (FFmpeg) — now with film ducking + subtitles
   - Existing ranking / selection / extraction / timeline tests
-2 skipped (real-TTS GPU tests — gated behind STUDIO_RUN_REAL_TESTS=1 + CUDA)
+3 skipped (real-TTS GPU tests + real-TTS benchmark — gated behind STUDIO_RUN_REAL_TESTS=1 + CUDA)
 11 deselected (slow / llm_integration)
 ─────────────────────────────────────────
-TOTAL: 164 passing, 0 failures
+TOTAL: 178 passing, 0 failures
 
 ## Status for Handoff
 
 ✅ **Architecture**: Complete and validated
 ✅ **Local Development**: Ready on weak laptops
-✅ **Testing**: Comprehensive, fast (112 passing, ~50s)
+✅ **Testing**: Comprehensive, fast (178 passing, ~3 min)
 ✅ **Multi-Scene Cut**: Selection, extraction, timeline, render, and QC wired end-to-end
 ✅ **Typed Evidence Selection**: Director-driven evidence typing used by selection
 ✅ **Real Script Provider**: Qwen narration writer integrated into the orchestrator
@@ -627,13 +687,16 @@ TOTAL: 164 passing, 0 failures
    (H.264 1280x720 + AAC, subtitles burned, `no_clipping: true`, peak −2.9 dB)
 ✅ **Qwen3-VL Vision Scene Enrichment**: `keyframes.py` + `Qwen3VLEnricher` +
    `enrich_factory.py` + `REQUIRE_REAL_VISION` strict mode; fills
-   location/actions/visual_description/themes/mood with per-field provenance;
-   26 tests; wired into `MovieAnalyzer(attach_keyframes=True)` + orchestrator
+   location/actions/objects/visual_description/visual_events/emotional_cues/
+   themes/mood/cinematography/confidence with per-field provenance; device-map
+   dispatch fix proven on a real T4; 44 vision/artifact/retrieval tests
 ✅ **Colab GPU Validation (LLM)**: PASSED on a real T4 with Qwen/Qwen3-4B-Instruct-2507
    (real concepts + narration, no OOM, no placeholder echo)
 ✅ **Documentation**: Profiles, provider system, configuration, Colab flow, TTS, vision
-⏳ **Real Qwen3-VL GPU run**: notebook `colab_vision_gpu.ipynb` + `colab_vision_setup.sh`
-   ready; needs a user-supplied legally-owned movie to execute on a T4/A100
+⏳ **Real Qwen3-VL movie-understanding run**: `colab_vision_gpu.ipynb` +
+   `colab_vision_setup.sh` ready and now produce all validation artifacts
+   (scene_index_v2, movie_memory/, understanding report, retrieval eval,
+   temporal probe); needs a user-supplied legally-owned movie to execute on a T4/A100
 ⏳ **Real-Movie + Real-TTS GPU run**: notebook `colab_real_movie_tts.ipynb` ready;
    needs a user-supplied legally-owned movie to execute on a T4/A100
 ⏳ **Image/Video Generation**: Mocks complete, integration pending

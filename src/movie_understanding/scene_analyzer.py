@@ -4,11 +4,14 @@ Turns a bare scene (``scene_id / start_sec / end_sec / transcript``) into a
 story-bearing unit the editorial director can reason about:
 
 ``story = {summary, topics, dialogue, characters, location, actions,
-           visual_description, emotional_tone, themes, mood, provenance}``
+           objects, visual_description, visual_events, emotional_cues,
+           emotional_tone, themes, mood, cinematography, confidence,
+           provenance}``
 
 Everything is deterministic-first. Fields that genuinely require vision or an
-LLM (location, actions, visual description, real themes) are left ``None`` and
-recorded as ``available: false`` in ``provenance`` rather than faked.
+LLM (location, actions, objects, visual description, visual events, emotional
+cues, themes, cinematography, confidence) are left ``None`` and recorded as
+``available: false`` in ``provenance`` rather than faked.
 """
 from typing import Dict, List, Optional
 
@@ -73,8 +76,10 @@ class SceneEnricher:
 class HeuristicSceneEnricher(SceneEnricher):
     """Deterministic enrichment: summary, topics, dialogue, tone, characters.
 
-    ``location`` / ``actions`` / ``visual_description`` / ``themes`` are
-    vision/LLM-only and reported as unavailable rather than invented.
+    ``location`` / ``actions`` / ``objects`` / ``visual_description`` /
+    ``visual_events`` / ``emotional_cues`` / ``themes`` / ``cinematography`` /
+    ``confidence`` are vision/LLM-only and reported as unavailable rather than
+    invented.
     """
 
     name = "heuristic"
@@ -109,10 +114,15 @@ class HeuristicSceneEnricher(SceneEnricher):
                 "characters": characters,
                 "location": None,
                 "actions": None,
+                "objects": None,
                 "visual_description": None,
+                "visual_events": None,
+                "emotional_cues": None,
                 "emotional_tone": tone,
                 "themes": None,
                 "mood": None,
+                "cinematography": None,
+                "confidence": None,
                 "provenance": {
                     "summary": "transcript",
                     "topics": "transcript_frequency",
@@ -120,10 +130,15 @@ class HeuristicSceneEnricher(SceneEnricher):
                     "characters": "transcript_capitalized_names",
                     "location": "unavailable (vision/LLM)",
                     "actions": "unavailable (vision/LLM)",
+                    "objects": "unavailable (vision/LLM)",
                     "visual_description": "unavailable (vision/LLM)",
+                    "visual_events": "unavailable (vision/LLM)",
+                    "emotional_cues": "unavailable (vision/LLM)",
                     "emotional_tone": "transcript_lexicon",
                     "themes": "unavailable (LLM)",
                     "mood": "unavailable (vision/LLM)",
+                    "cinematography": "unavailable (vision/LLM)",
+                    "confidence": "unavailable (vision/LLM)",
                 },
             },
         }

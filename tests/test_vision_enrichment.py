@@ -138,8 +138,14 @@ class _FakeVL(Qwen3VLEnricher):
     """Enricher with a fake 'model' that always emits a given JSON answer."""
 
     def __init__(self, answer: str = '{"location": "bar", "actions": ["drink"], '
-                                     '"visual_description": "dim bar", "themes": ["loneliness"], '
-                                     '"mood": "somber"}'):
+                                     '"objects": ["bottle", "counter"], '
+                                     '"visual_description": "dim bar", '
+                                     '"visual_events": ["patron enters at ~1s"], '
+                                     '"emotional_cues": ["slumped shoulders"], '
+                                     '"themes": ["loneliness"], '
+                                     '"mood": "somber", '
+                                     '"cinematography": "medium shot, low key", '
+                                     '"confidence": 0.85}'):
         super().__init__(strict=False)
         self._answer = answer
         self._calls = []
@@ -265,8 +271,15 @@ def test_fake_vl_populates_vision_fields():
     assert story["visual_description"] == "dim bar"
     assert story["themes"] == ["loneliness"]
     assert story["mood"] == "somber"
+    assert story["objects"] == ["bottle", "counter"]
+    assert story["visual_events"] == ["patron enters at ~1s"]
+    assert story["emotional_cues"] == ["slumped shoulders"]
+    assert story["cinematography"] == "medium shot, low key"
+    assert story["confidence"] == 0.85
     assert story["provenance"]["location"] == "qwen3vl"
     assert story["provenance"]["visual_description"] == "qwen3vl"
+    assert story["provenance"]["objects"] == "qwen3vl"
+    assert story["provenance"]["confidence"] == "qwen3vl"
     # transcript-derived fields survive
     assert isinstance(story["summary"], str)
 
@@ -334,6 +347,55 @@ def test_enricher_prompt_refers_to_scene_id():
     en.enrich(_scene_with_keyframes(_scenes()[1]), [])
     prompt = en._calls[0][1]
     assert "scene-2" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Temporal probe (ordered visual events with approximate timestamps)
+# ---------------------------------------------------------------------------
+
+
+def test_temporal_probe_parses_ordered_events():
+    en = _FakeVL(
+        answer='{"visual_events": [{"time_sec": 0.0, "event": "character enters"}, '
+               '{"time_sec": 2.0, "event": "sits down"}, '
+               '{"time_sec": 4.0, "event": "coin appears"}], '
+               '"confidence": 0.7, "limitation": "frames spaced ~3s apart"}'
+    )
+    scene = _scene_with_keyframes(_scenes()[1])  # 3.0-6.0s window, 2 keyframes
+    out = en.probe_temporal(scene, [], n_frames=2)
+    assert out["ok"] is True
+    assert out["visual_events"][0]["event"] == "character enters"
+    assert out["visual_events"][1]["time_sec"] == 2.0
+    assert out["confidence"] == 0.7
+    assert out["limitation"]
+    assert out["scene_id"] == "scene-2"
+
+
+def test_temporal_probe_string_events():
+    en = _FakeVL(
+        answer='{"visual_events": ["character enters", "sits down"], '
+               '"confidence": 0.5}'
+    )
+    out = en.probe_temporal(_scene_with_keyframes(_scenes()[1]), [], n_frames=2)
+    assert out["ok"] is True
+    assert out["visual_events"][0] == {"time_sec": None, "event": "character enters"}
+
+
+def test_temporal_probe_needs_two_keyframes():
+    en = _FakeVL()
+    scene = dict(_scenes()[0])
+    scene["key_frames"] = ["/tmp/k1.jpg"]  # only one frame
+    out = en.probe_temporal(scene, [])
+    assert out["ok"] is False
+    assert "2 keyframes" in out["reason"]
+
+
+def test_temporal_probe_degrades_when_vision_unavailable():
+    en = _FakeVL()
+    en._faked_ok = False
+    out = en.probe_temporal(_scene_with_keyframes(_scenes()[1]), [])
+    assert out["ok"] is False
+    assert out["reason"] == "no GPU"
 
 
 # ---------------------------------------------------------------------------
@@ -435,3 +497,8 @@ def test_heuristic_has_mood_field():
     story = HeuristicSceneEnricher().enrich(_scenes()[0], [])["story"]
     assert story["mood"] is None
     assert story["provenance"]["mood"] == "unavailable (vision/LLM)"
+    # new vision/LLM-only fields are also honestly None + provenance-flagged
+    for field in ("objects", "visual_events", "emotional_cues",
+                  "cinematography", "confidence"):
+        assert story[field] is None
+        assert story["provenance"][field].startswith("unavailable")

@@ -2,8 +2,9 @@
 
 Implements the :class:`~movie_understanding.scene_analyzer.SceneEnricher`
 interface for the *visual* fields that the heuristic enricher honestly leaves
-unavailable (``location`` / ``actions`` / ``visual_description`` / ``themes`` /
-``mood``). The enricher:
+unavailable (``location`` / ``actions`` / ``objects`` / ``visual_description`` /
+``visual_events`` / ``emotional_cues`` / ``themes`` / ``mood`` /
+``cinematography`` / ``confidence``). The enricher:
 
 1. extracts one or more keyframes per scene (FFmpeg) at a timestamp the caller
    provides or evenly spaced across the scene window,
@@ -316,9 +317,14 @@ visually justified or strongly implied by the transcript. Fill every field:
 {{
   "location": "VISIBLE LOCATION — indoor/outdoor, type of place, setting",
   "actions": ["ACTION1", "ACTION2"],
+  "objects": ["OBJECT1", "OBJECT2"],
   "visual_description": "2-3 sentences describing composition, subjects, lighting, colors, objects, camera feel",
+  "visual_events": ["event 1 (approximate time in the scene, e.g. 'character enters at ~1s')", "event 2"],
+  "emotional_cues": ["CUE1", "CUE2"],
   "themes": ["THEME1", "THEME2"],
-  "mood": "ONE-WORD-or-phrase emotional mood of the frame"
+  "mood": "ONE-WORD-or-phrase emotional mood of the frame",
+  "cinematography": "shot size, camera angle/movement, lighting, depth of field",
+  "confidence": 0.0-1.0 (how confident you are in this reading of the frame)
 }}
 
 IMPORTANT - REPLACE, DON'T COPY:
@@ -425,7 +431,9 @@ Answer now:"""
                            reason: str) -> dict:
         """Story with vision fields marked unavailable and a provenance reason."""
         story = self._base_story(scene, transcript_segments)
-        for field in ("location", "actions", "visual_description", "themes", "mood"):
+        for field in ("location", "actions", "objects", "visual_description",
+                      "visual_events", "emotional_cues", "themes", "mood",
+                      "cinematography", "confidence"):
             story[field] = None
             story["provenance"][field] = f"unavailable ({reason})"
         return story
@@ -502,19 +510,138 @@ Answer now:"""
         story.update({
             "location": _clean_str(parsed.get("location")),
             "actions": _clean_list(parsed.get("actions")),
+            "objects": _clean_list(parsed.get("objects")),
             "visual_description": _clean_str(parsed.get("visual_description")),
+            "visual_events": _clean_list(parsed.get("visual_events")),
+            "emotional_cues": _clean_list(parsed.get("emotional_cues")),
             "themes": _clean_list(parsed.get("themes")),
             "mood": _clean_str(parsed.get("mood")),
+            "cinematography": _clean_str(parsed.get("cinematography")),
+            "confidence": _clean_confidence(parsed.get("confidence")),
         })
         story["provenance"].update({
             "location": self.name,
             "actions": self.name,
+            "objects": self.name,
             "visual_description": self.name,
+            "visual_events": self.name,
+            "emotional_cues": self.name,
             "themes": self.name,
             "mood": self.name,
+            "cinematography": self.name,
+            "confidence": self.name,
         })
 
         return {**self._scene_shell(scene), "story": story}
+
+    # ------------------------------------------------------------------
+    # Temporal probe (evaluation): ordered visual events w/ approx time
+    # ------------------------------------------------------------------
+
+    def _build_temporal_prompt(self, scene: dict, transcript_text: str,
+                               n_frames: int) -> str:
+        scene_id = scene.get("scene_id", "scene")
+        return f"""You are analyzing {n_frames} frames spread across a film scene.
+
+## Frames
+{n_frames} keyframes taken evenly through the scene window
+({float(scene.get('start_sec', 0.0)):g}s - {float(scene.get('end_sec', 0.0)):g}s),
+in chronological order.
+
+## Scene transcript (dialogue / narration audible during the scene)
+{transcript_text[:400] or "(no dialogue in this scene)"}
+
+## Scene id
+{scene_id}
+
+## Task
+Order the key *visual events* that happen in this scene (character enters,
+sits, object appears, close-up, dialogue, reaction, character leaves, etc.).
+Give each event an APPROXIMATE time (in seconds from the scene start). Be
+honest: if you cannot localize an event to a time, say "~?" rather than
+guessing. Return ONLY valid JSON:
+
+{{
+  "visual_events": [
+    {{"time_sec": 0.0, "event": "SHORT DESCRIPTION OF WHAT IS VISIBLE"}}
+  ],
+  "confidence": 0.0-1.0,
+  "limitation": "honest note about what this temporal read cannot capture"
+}}
+
+IMPORTANT - REPLACE, DON'T COPY:
+- The ALL-CAPS strings above are placeholders, NOT text to output.
+- Write original observations about THESE frames only.
+
+Answer now:"""
+
+    def probe_temporal(self, scene: dict, transcript_segments: List[dict],
+                       n_frames: int = 4) -> dict:
+        """Return an ordered, approx-timestamped visual event list for a scene.
+
+        Evaluation-only helper for the temporal-understanding milestone. Uses
+        ``n_frames`` keyframes spread across the scene (the caller must have
+        attached them via ``key_frames``). Honest failure mode: if vision is
+        unavailable it returns a record with ``ok=false`` rather than inventing
+        timestamps.
+        """
+        scene_id = scene.get("scene_id", "scene-0")
+        ok, reason = self._vision_available()
+        if not ok:
+            return {"scene_id": scene_id, "ok": False, "reason": reason}
+
+        keyframes = [k for k in (scene.get("key_frames") or []) if k]
+        if isinstance(scene.get("key_frames"), str):
+            keyframes = [scene["key_frames"]]
+        if len(keyframes) < 2:
+            return {
+                "scene_id": scene_id,
+                "ok": False,
+                "reason": f"need >=2 keyframes for temporal probe (have {len(keyframes)})",
+            }
+
+        self._initialize()
+        transcript_text = " ".join(
+            d.get("text", "") for d in (transcript_segments or [])
+            if d.get("text")
+        ) or (scene.get("transcript") or "")
+
+        prompt = self._build_temporal_prompt(
+            scene, transcript_text, len(keyframes[:n_frames]))
+        try:
+            output = self._generate(keyframes[:n_frames], prompt)
+        except Exception as e:
+            return {"scene_id": scene_id, "ok": False,
+                    "reason": f"generation failed: {e}"}
+
+        parsed = _extract_json_dict(output)
+        if not parsed:
+            return {"scene_id": scene_id, "ok": False,
+                    "reason": f"non-JSON output: {output[:200]}"}
+
+        events = parsed.get("visual_events") or []
+        if isinstance(events, list):
+            cleaned = []
+            for ev in events:
+                if isinstance(ev, dict):
+                    cleaned.append({
+                        "time_sec": _clean_sec(ev.get("time_sec")),
+                        "event": _clean_str(ev.get("event")),
+                    })
+                elif isinstance(ev, str):
+                    cleaned.append({"time_sec": None, "event": _clean_str(ev)})
+            cleaned = [e for e in cleaned if e["event"]]
+        else:
+            cleaned = []
+
+        return {
+            "scene_id": scene_id,
+            "ok": True,
+            "visual_events": cleaned,
+            "confidence": _clean_confidence(parsed.get("confidence")),
+            "limitation": _clean_str(parsed.get("limitation")),
+            "raw": output[:500],
+        }
 
 
 def _clean_str(value) -> Optional[str]:
@@ -537,6 +664,32 @@ def _clean_list(value) -> List[str]:
         if s:
             out.append(s)
     return out[:6]
+
+
+def _clean_confidence(value) -> Optional[float]:
+    """Parse the model's self-assessed confidence into 0..1 or None."""
+    if value is None:
+        return None
+    try:
+        c = float(value)
+    except (TypeError, ValueError):
+        return None
+    if c != c:  # NaN
+        return None
+    return round(max(0.0, min(1.0, c)), 2)
+
+
+def _clean_sec(value) -> Optional[float]:
+    """Parse an approximate seconds offset (non-negative, not clamped to 1)."""
+    if value is None:
+        return None
+    try:
+        s = float(value)
+    except (TypeError, ValueError):
+        return None
+    if s != s:  # NaN
+        return None
+    return round(max(0.0, s), 2)
 
 
 def attach_keyframes_to_scenes(

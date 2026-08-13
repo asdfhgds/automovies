@@ -104,7 +104,23 @@ class MovieAnalyzer:
 
         movie_memory.save_movie_index(project_dir, movie_index)
         movie_memory.save_semantic_index(project_dir, semantic.to_dict())
+        _write_artifacts(project_dir, movie_index)
         return movie_index
+
+
+def _write_artifacts(project_dir: Path, movie_index: dict) -> None:
+    """Persist the derived scene-index v2 + movie_memory bundle.
+
+    Runs after the canonical movie_index.json / semantic_index.json so the
+    project always carries the versioned, director-facing artifacts too.
+    """
+    from movie_understanding.artifacts import (
+        write_movie_memory_bundle,
+        write_scene_index_v2,
+    )
+
+    write_scene_index_v2(project_dir, movie_index)
+    write_movie_memory_bundle(project_dir, movie_index)
 
 
 def _scene_character_map(enriched: List[dict]) -> Dict[str, List[str]]:

@@ -11,28 +11,49 @@
   editorial timeline (excerpts), editorial FFmpeg renderer
 - ✅ Orchestrator `EDITORIAL_MODE=true` wired end-to-end; QC covers the
   editorial cut
-- ✅ 164 tests pass locally (vision + editorial + movie-understanding suites added)
+- ✅ 178 tests pass locally (vision + editorial + movie-understanding + artifacts + retrieval suites added)
 - ⏳ GPU validation notebooks: `colab_editorial_gpu.ipynb`, `colab_vision_gpu.ipynb`
 
-### Vision Scene Enrichment (Qwen3-VL) — Built + Tested, GPU Run Pending
+### Vision Scene Enrichment (Qwen3-VL) — Built + Tested, Real-Movie Run Pending
 - ✅ `src/movie_understanding/keyframes.py` — FFmpeg keyframe extraction per
   scene window (no OpenCV dependency; window validation, missing-source errors)
 - ✅ `src/movie_understanding/vision_enricher.py` — `Qwen3VLEnricher`
   implementing the `SceneEnricher` interface: lazy Qwen2.5-VL/Qwen3-VL load
   (shared class-level cache), GPU-optional, 4-bit NF4, SDPA, chat-template
   image handling with processor API fallback; fills `location` / `actions` /
-  `visual_description` / `themes` / `mood` with per-field `provenance=qwen3vl`;
-  degrades to heuristic (fields `None` + `unavailable(<reason>)`) without GPU
-  or keyframes, or raises under `REQUIRE_REAL_VISION=true`
+  `objects` / `visual_description` / `visual_events` / `emotional_cues` /
+  `themes` / `mood` / `cinematography` / `confidence` with per-field
+  `provenance=qwen3vl`; degrades to heuristic (fields `None` +
+  `unavailable(<reason>)`) without GPU or keyframes, or raises under
+  `REQUIRE_REAL_VISION=true`
+- ✅ **Device-dispatch fix**: `.model.to("cuda")` is never called after
+  `device_map="auto"` dispatches the model (fixes "You can't move a model that
+  has some modules offloaded to cpu or disk" seen on a real T4); regression
+  tests for both the dispatched and un-dispatched load paths
 - ✅ `src/movie_understanding/enrich_factory.py` — env-driven selection
   (`VISION_ENRICHER`, `VISION_MODEL`, `VISION_DEVICE`, `VISION_DTYPE`,
   `VISION_MAX_FRAMES`) + `require_real_vision` strict guard
 - ✅ `MovieAnalyzer(attach_keyframes=True)` + orchestrator editorial path now
   run the vision enricher (`VISION_ENRICHER=qwen3vl`)
-- ✅ 26 vision tests (keyframes, JSON repair, fake-VL enrich/degrade/strict,
-  analyzer integration, factory/env); 164 total passing
+- ✅ **Vision-aware semantic retrieval**: `SemanticIndex` corpus includes
+  location / actions / objects / visual_description / visual_events /
+  emotional_cues / themes / mood / cinematography, so on-screen content is
+  queryable
+- ✅ **Director-facing artifacts**: `scene_index_v2.json` (versioned enriched
+  scene index), `movie_memory/` bundle (index + scene v2 + semantic +
+  characters + events + manifest), and `reports/movie_understanding_report.md`
+  are written by the analyzer
+- ✅ **Retrieval evaluation harness** (`scripts/evaluate_retrieval.py`):
+  milestone queries → `reports/retrieval_evaluation.json` + `.md` with blank
+  `human_assessment` fields (GOOD/PARTIAL/WRONG)
+- ✅ **Temporal probe** (`Qwen3VLEnricher.probe_temporal`): orders visual
+  events with approximate timestamps across N keyframes; honest when it cannot
+  localize
+- ✅ 44 vision/artifact/retrieval tests; **178 total passing**
 - ✅ `scripts/colab_vision_setup.sh` + `notebooks/colab_vision_gpu.ipynb`
-- ⏳ Real Qwen3-VL run on a T4 with a user-supplied movie (pending)
+  (cells 7/7b/7c produce all artifacts, retrieval eval, temporal probe)
+- ⏳ Real Qwen3-VL movie-understanding run on a T4 with a user-supplied movie
+  (pending — the validation milestone)
 
 ### Foundation: Movie Understanding (Real & Tested)
 - ✅ **Transcription**: Whisper/WhisperX with word-level timestamps
@@ -328,7 +349,11 @@ Improve quality and reduce costs through iteration.
 2. ✅ Script generation via LLM (Qwen) — subsumed by the real script writer
 3. ✅ Real TTS (Phase 2) — Kokoro / Chatterbox / Qwen3-TTS + audio mix + benchmark
 4. ✅ Editorial pipeline (movie intelligence + evidence-driven editorial plan/script/timeline/render) — local E2E proven
-5. ⏳ Run `notebooks/colab_editorial_gpu.ipynb` on T4/A100 with a user-supplied movie → watch the edited short
+5. ⏳ **Validate Movie Intelligence on the real movie** — run
+   `notebooks/colab_vision_gpu.ipynb` on a T4/A100 with a user-supplied movie:
+   inspect 10+ scenes, run retrieval eval (GOOD/PARTIAL/WRONG), temporal probe,
+   compare old vs new scene knowledge, record performance → then wire the
+   validated scene knowledge into the Creative Director
 6. ⏳ Evaluate several real videos; pick next milestone from the largest visible weakness
 
 ### Medium Priority (Do After)
