@@ -167,6 +167,95 @@ def _scene_with_keyframes(scene=None):
     return scene
 
 
+# ---------------------------------------------------------------------------
+# Real _initialize path (accelerate device_map dispatch) — regression for the
+# "You can't move a model that has some modules offloaded to cpu" failure seen
+# on a real T4. AutoModel.from_pretrained is faked into an object whose .to()
+# raises when called on a dispatched model, proving we never call it.
+# ---------------------------------------------------------------------------
+
+
+class _DispatchedModel:
+    def __init__(self, to_raises):
+        self._to_raises = to_raises
+
+    def eval(self):
+        return self
+
+    def to(self, *a, **k):
+        if self._to_raises:
+            raise RuntimeError("You can't move a model that has some modules offloaded to cpu or disk.")
+        return self
+
+
+class _FakeProcessor:
+    pass
+
+
+def test_initialize_never_calls_to_on_dispatched_model(monkeypatch):
+    import movie_understanding.vision_enricher as ve
+
+    # Clear the class-level cache so we exercise the load path.
+    ve._MODEL_CACHE.clear()
+    monkeypatch.setattr(ve, "_gpu_available", lambda: True)
+
+    import sys
+    import types
+
+    fake_transformers = types.ModuleType("transformers")
+    fake_transformers.AutoProcessor = type(
+        "AutoProcessor", (), {"from_pretrained": staticmethod(lambda *a, **k: _FakeProcessor())}
+    )
+    fake_transformers.AutoModel = type(
+        "AutoModel", (),
+        {"from_pretrained": staticmethod(lambda *a, **k: _DispatchedModel(to_raises=True))},
+    )
+
+    # Sub in a fake transformers module (AutoProcessor/AutoModel only) so the
+    # real CUDA/torch stack is never touched.
+    import transformers as _real_tf
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+    try:
+        en = ve.Qwen3VLEnricher(model="fake/vl", device="cuda", strict=False)
+        en._initialize()
+    finally:
+        monkeypatch.setitem(sys.modules, "transformers", _real_tf)
+        ve._MODEL_CACHE.clear()
+
+    assert en._initialized is True
+    assert en.model_load_time_sec == 0.0 or en.model_load_time_sec > 0
+
+
+def test_initialize_calls_to_when_not_dispatched(monkeypatch):
+    """CPU path (no device_map) still calls .to() but tolerates the plain model."""
+    import movie_understanding.vision_enricher as ve
+
+    ve._MODEL_CACHE.clear()
+    monkeypatch.setattr(ve, "_gpu_available", lambda: False)
+
+    import sys
+    import types
+
+    fake_transformers = types.ModuleType("transformers")
+    fake_transformers.AutoProcessor = type(
+        "AutoProcessor", (), {"from_pretrained": staticmethod(lambda *a, **k: _FakeProcessor())}
+    )
+    fake_transformers.AutoModel = type(
+        "AutoModel", (),
+        {"from_pretrained": staticmethod(lambda *a, **k: _DispatchedModel(to_raises=False))},
+    )
+
+    import transformers as _real_tf
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+    try:
+        en = ve.Qwen3VLEnricher(model="fake/vl", device="cpu", strict=False)
+        en._initialize()
+    finally:
+        monkeypatch.setitem(sys.modules, "transformers", _real_tf)
+        ve._MODEL_CACHE.clear()
+    assert en._initialized is True
+
+
 def test_fake_vl_populates_vision_fields():
     en = _FakeVL()
     out = en.enrich(_scene_with_keyframes(), [])

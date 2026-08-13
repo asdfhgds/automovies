@@ -261,12 +261,20 @@ class Qwen3VLEnricher(SceneEnricher):
             self.model = AutoModel.from_pretrained(self.model_name, **load_kwargs)
             self.model.eval()
 
-            if device == "cuda":
-                self.model.to(device)
+            # device_map="auto" already dispatched the model (accelerate hooks,
+            # overflow offloaded to CPU). Calling .to(device) afterwards raises
+            # "You can't move a model that has some modules offloaded to cpu".
+            # Only a plain, un-dispatched (CPU) load needs an explicit no-op here.
+            if device != "cuda":
                 try:
-                    torch.cuda.empty_cache()
+                    self.model.to(device)
                 except Exception:
                     pass
+            try:
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
 
             self._device_resolved = device
             self._initialized = True
