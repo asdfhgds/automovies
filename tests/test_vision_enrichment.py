@@ -275,6 +275,78 @@ def test_initialize_calls_to_when_not_dispatched(monkeypatch):
     assert en._initialized is True
 
 
+class _GenModel:
+    def generate(self, **k):
+        return None
+
+
+class _NoGenModel:
+    pass
+
+
+def _fake_transformers_cls(cls_name, returns):
+    return type(cls_name, (), {"from_pretrained": staticmethod(lambda *a, **k: returns())})
+
+
+def test_load_conditional_vl_resolves_to_vision2seq_when_causal_returns_base(monkeypatch):
+    """Regression: when AutoModelForCausalLM/AutoModel return a base model
+    without .generate() (as seen on real Colab with Qwen2.5-VL-7B), the
+    resolver must find the *VLForConditionalGeneration wrapper."""
+    import sys
+    import types
+    import movie_understanding.vision_enricher as ve
+
+    fake_tf = types.ModuleType("transformers")
+    fake_tf.AutoModel = _fake_transformers_cls("AutoModel", _NoGenModel)
+    fake_tf.AutoModelForCausalLM = _fake_transformers_cls("AutoModelForCausalLM", _NoGenModel)
+    fake_tf.AutoModelForVision2Seq = _fake_transformers_cls("AutoModelForVision2Seq", _GenModel)
+
+    import transformers as _real_tf
+    monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+    try:
+        model = ve._load_conditional_vl("fake/vl", {})
+    finally:
+        monkeypatch.setitem(sys.modules, "transformers", _real_tf)
+    assert isinstance(model, _GenModel)
+
+
+def test_load_conditional_vl_falls_back_to_concrete_qwen_module(monkeypatch):
+    """Regression: when every auto entry point returns base models, the
+    concrete transformers.models.qwen*_vl ForConditionalGeneration class
+    still yields a generate()-able model (cross-version robustness)."""
+    import sys
+    import types
+    import movie_understanding.vision_enricher as ve
+
+    fake_tf = types.ModuleType("transformers")
+    for name in ("AutoModel", "AutoModelForCausalLM",
+                 "AutoModelForVision2Seq", "AutoModelForImageTextToText"):
+        setattr(fake_tf, name, _fake_transformers_cls(name, _NoGenModel))
+
+    models_pkg = types.ModuleType("transformers.models")
+    fake_tf.models = models_pkg
+    qwen_mod = types.ModuleType("transformers.models.qwen2_5_vl")
+    qwen_mod.Qwen2_5_VLForConditionalGeneration = type(
+        "Qwen2_5_VLForConditionalGeneration", (), {
+            "from_pretrained": staticmethod(lambda *a, **k: _GenModel()),
+        }
+    )
+
+    sentinel_tf = sys.modules["transformers"]
+    sentinel_models = sys.modules.get("transformers.models")
+    sentinel_qwen = sys.modules.get("transformers.models.qwen2_5_vl")
+    monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+    monkeypatch.setitem(sys.modules, "transformers.models", models_pkg)
+    monkeypatch.setitem(sys.modules, "transformers.models.qwen2_5_vl", qwen_mod)
+    try:
+        model = ve._load_conditional_vl("fake/vl", {})
+    finally:
+        monkeypatch.setitem(sys.modules, "transformers", sentinel_tf)
+        monkeypatch.setitem(sys.modules, "transformers.models", sentinel_models)
+        monkeypatch.setitem(sys.modules, "transformers.models.qwen2_5_vl", sentinel_qwen)
+    assert isinstance(model, _GenModel)
+
+
 def test_fake_vl_populates_vision_fields():
     en = _FakeVL()
     out = en.enrich(_scene_with_keyframes(), [])

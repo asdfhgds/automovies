@@ -32,6 +32,60 @@ logger = logging.getLogger(__name__)
 # heavy; loading one copy per scene would be wasteful and OOM-prone.
 _MODEL_CACHE: dict = {}
 
+
+def _load_conditional_vl(model_name: str, load_kwargs: dict):
+    """Load a vision-language model with a ``.generate()`` method.
+
+    ``AutoModel``/``AutoModelForCausalLM`` resolve Qwen VL checkpoints to the
+    base ``Qwen*_VLModel`` (no ``.generate()``) on many transformers versions,
+    so we walk the entry points that yield the ``*_VLForConditionalGeneration``
+    wrapper (vision2seq → image-text-to-text → causal-lm), then concretely scan
+    the ``transformers.models.qwen*_vl`` modules as a cross-version fallback.
+    Returns the first model that carries ``.generate()``.
+    """
+    import importlib
+
+    errors: List[str] = []
+    tf = importlib.import_module("transformers")
+    entry_points = [
+        getattr(tf, "AutoModelForVision2Seq", None),
+        getattr(tf, "AutoModelForImageTextToText", None),
+        getattr(tf, "AutoModelForCausalLM", None),
+        getattr(tf, "AutoModel", None),
+    ]
+    for loader in entry_points:
+        if loader is None:
+            continue
+        try:
+            model = loader.from_pretrained(model_name, **load_kwargs)
+        except Exception as e:  # noqa: BLE001 - entry point may not map this model
+            errors.append(f"{loader.__name__}: {e}")
+            continue
+        if hasattr(model, "generate"):
+            return model
+    for module_name in ("qwen3_vl", "qwen2_5_vl", "qwen2_vl"):
+        try:
+            mod = importlib.import_module(f"transformers.models.{module_name}")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{module_name}: {e}")
+            continue
+        for attr in dir(mod):
+            if attr.endswith("ForConditionalGeneration") and not attr.startswith("_"):
+                cls = getattr(mod, attr)
+                try:
+                    model = cls.from_pretrained(model_name, **load_kwargs)
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{cls.__name__}: {e}")
+                    continue
+                if hasattr(model, "generate"):
+                    return model
+    raise RuntimeError(
+        f"no transformers entry point produced a .generate()-able model for "
+        f"{model_name}; tried vision2seq / image-text-to-text / causal-lm / "
+        f"base auto classes + concrete qwen*_vl classes. Last errors: "
+        f"{'; '.join(errors[-4:])}"
+    )
+
 _SYSTEM_PROMPT = (
     "You are a film analyst. You look at a single frame (or a few frames) from "
     "a film scene and describe exactly what is visibly happening. Always answer "
@@ -217,7 +271,7 @@ class Qwen3VLEnricher(SceneEnricher):
         _load_start = _time.monotonic()
         try:
             import torch
-            from transformers import AutoProcessor, AutoModelForCausalLM
+            from transformers import AutoProcessor
 
             device = self._resolve_device()
             cache_key = (self.model_name, device, str(self.dtype))
@@ -259,21 +313,7 @@ class Qwen3VLEnricher(SceneEnricher):
             if device == "cuda":
                 load_kwargs["device_map"] = "auto"
                 load_kwargs["attn_implementation"] = "sdpa"
-            # AutoModel returns the base Qwen*VLModel (no .generate); the
-            # conditional-generation wrapper comes from AutoModelForCausalLM.
-            try:
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    self.model_name, **load_kwargs
-                )
-            except Exception:
-                from transformers import AutoModel
-                self.model = AutoModel.from_pretrained(self.model_name, **load_kwargs)
-            if not hasattr(self.model, "generate"):
-                raise RuntimeError(
-                    f"{self.model_name} loaded as {type(self.model).__name__} "
-                    "without .generate(); a conditional-generation checkpoint "
-                    "is required"
-                )
+            self.model = _load_conditional_vl(self.model_name, load_kwargs)
             self.model.eval()
 
             # device_map="auto" already dispatched the model (accelerate hooks,
