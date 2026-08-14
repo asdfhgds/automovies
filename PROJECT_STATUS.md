@@ -3,7 +3,8 @@
 **Last Updated**: Movie Intelligence validation milestone **executed on a real
 movie**. `notebooks/colab_vision_gpu.ipynb` ran end-to-end on a Colab T4 with
 `Qwen/Qwen2.5-VL-3B-Instruct` (bf16): project `5398e39c-d35b-481a-b580-42d7224732eb`,
-120.078s window (opening credits → opening monologue), 33 scenes, **33/33 scenes
+120.078s window (opening credits → opening monologue — **Portuguese-dubbed clip
+this time**; English is the norm for normal runs), 33 scenes, **33/33 scenes
 vision-enriched** (`provenance=qwen3vl`), ~3.6s/scene, no OOM. Human verdicts on the
 milestone retrieval queries: **1 GOOD / 2 PARTIAL / 5 WRONG** (TF-IDF word-overlap
 retrieval has no semantic reasoning); temporal probe runs OOM-free but still anchors
@@ -441,7 +442,7 @@ python src/main.py run --project-id <id>
   "First input link timebase ... do not match ... xfade timebase")
 - ✅ **Real Qwen3-VL movie-understanding run EXECUTED (Colab T4)**: project
   `5398e39c-d35b-481a-b580-42d7224732eb` — `Qwen/Qwen2.5-VL-3B-Instruct` bf16,
-  120.078s window, 33/33 scenes enriched (`provenance=qwen3vl`), ~3.6s/scene,
+  120.078s window (Portuguese-dubbed clip; normally English), 33/33 scenes enriched (`provenance=qwen3vl`), ~3.6s/scene,
   no OOM, all artifacts produced (`scene_index_v2.json`, `semantic_index.json`,
   `movie_understanding_report.md`, `retrieval_evaluation.json`/`.md`,
   `temporal_probe.json`). Human verdicts: retrieval **1 GOOD / 2 PARTIAL /

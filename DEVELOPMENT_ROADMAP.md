@@ -56,7 +56,7 @@
   (cells 7/7b/7c produce all artifacts, retrieval eval, temporal probe)
 - ✅ **Real Qwen3-VL movie-understanding run EXECUTED** on a Colab T4 with a
   user-supplied movie (project `5398e39c-d35b-481a-b580-42d7224732eb`):
-  `Qwen/Qwen2.5-VL-3B-Instruct` bf16, 120.078s window, 33/33 scenes enriched
+  `Qwen/Qwen2.5-VL-3B-Instruct` bf16, 120.078s window (Portuguese-dubbed clip; English is the norm), 33/33 scenes enriched
   (`provenance=qwen3vl`), ~3.6s/scene, no OOM. Human verdicts: retrieval
   **1 GOOD / 2 PARTIAL / 5 WRONG** (TF-IDF word-overlap — the measured next
   weakness); temporal probe OOM-free but mostly unanchored. Full artifacts

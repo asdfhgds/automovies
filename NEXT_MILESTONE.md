@@ -3,7 +3,7 @@
 **Last Updated**: Movie Intelligence validation milestone **completed on a real
 movie**. `notebooks/colab_vision_gpu.ipynb` ran end-to-end on a Colab T4 with
 `Qwen/Qwen2.5-VL-3B-Instruct` (bf16): project `5398e39c-d35b-481a-b580-42d7224732eb`,
-120.078s window, 33 scenes, 33/33 enriched (`provenance=qwen3vl`), ~3.6s/scene,
+120.078s window (Portuguese-dubbed clip; English is the norm), 33 scenes, 33/33 enriched (`provenance=qwen3vl`), ~3.6s/scene,
 no OOM. Milestone verdicts (human): retrieval **1 GOOD / 2 PARTIAL / 5 WRONG**
 (TF-IDF has no semantic reasoning) and temporal probe works but mostly unanchored.
 183 fast tests pass. **Next bottleneck: retrieval semantics + temporal localization.**
@@ -49,7 +49,8 @@ retrieval human-verdict record is tracked in `reports/`.
   - Local E2E: **183 fast tests pass** (vision, artifacts, retrieval, editorial,
     movie-understanding suites).
   - **Real-movie run executed (Colab T4)**: project `5398e39c-d35b-481a-b580-
-    42d7224732eb` — `Qwen/Qwen2.5-VL-3B-Instruct` (bf16), 120.078s window,
+    42d7224732eb` — `Qwen/Qwen2.5-VL-3B-Instruct` (bf16), 120.078s window
+    (Portuguese-dubbed clip; English is the normal case),
     33/33 scenes vision-enriched, ~3.6s/scene, no OOM; all artifacts (scene
     index v2, semantic index, understanding report, retrieval eval, temporal
     probe) preserved under `data/5398e39c-.../` + `reports/` (gitignored by

@@ -5,7 +5,8 @@ Method: TF-IDF semantic + transcript + dialogue overlap.
 Assessment scale: **GOOD** / **PARTIAL** / **WRONG**.
 
 Milestone verdict (real run, project `5398e39c-d35b-481a-b580-42d7224732eb`, window 0-120s:
-opening credits into the opening monologue): **1 GOOD / 2 PARTIAL / 5 WRONG**. TF-IDF
+opening credits into the opening monologue — **Portuguese-dubbed clip**; English is the
+normal case): **1 GOOD / 2 PARTIAL / 5 WRONG**. TF-IDF
 word-overlap retrieval works when the query's vocabulary is literally present in the
 vision fields (Q4, emphasized object), but every narrative/thematic query fails or is
 noisy -- there is no semantic reasoning, only token overlap.
