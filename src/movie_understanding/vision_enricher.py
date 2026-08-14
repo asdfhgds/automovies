@@ -317,7 +317,12 @@ class Qwen3VLEnricher(SceneEnricher):
                     )
             if device == "cuda":
                 load_kwargs["device_map"] = "auto"
-                load_kwargs["attn_implementation"] = "sdpa"
+                # "sdpa" hits a known Qwen2.5-VL device-side assert in current
+                # transformers ("CUDA error: device-side assert triggered", often
+                # surfacing on a later scene). "eager" is slow but stable on a T4;
+                # override with VISION_ATTN=sdpa on a build where sdpa is reliable.
+                attn_impl = _os.environ.get("VISION_ATTN", "eager")
+                load_kwargs["attn_implementation"] = attn_impl
             self.model = _load_conditional_vl(self.model_name, load_kwargs)
             self.model.eval()
 
