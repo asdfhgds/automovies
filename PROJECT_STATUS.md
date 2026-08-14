@@ -1,17 +1,23 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
 **Last Updated**: Movie Intelligence validation milestone **executed on a real
-movie**. `notebooks/colab_vision_gpu.ipynb` ran end-to-end on a Colab T4 with
-`Qwen/Qwen2.5-VL-3B-Instruct` (bf16): project `5398e39c-d35b-481a-b580-42d7224732eb`,
-120.078s window (opening credits → opening monologue — **Portuguese-dubbed clip
-this time**; English is the norm for normal runs), 33 scenes, **33/33 scenes
-vision-enriched** (`provenance=qwen3vl`), ~3.6s/scene, no OOM. Human verdicts on the
-milestone retrieval queries: **1 GOOD / 2 PARTIAL / 5 WRONG** (TF-IDF word-overlap
-retrieval has no semantic reasoning); temporal probe runs OOM-free but still anchors
-most events at `time_sec: 0.0` (honest limitation). Full artifacts preserved
-under `data/5398e39c-d35b-481a-b580-42d7224732eb/` (gitignored by design — scene
-cards carry the movie's dialogue; the human-verdict record is tracked under
-`reports/`). 183 tests pass locally.
+movie** + **dense-embedding retrieval layer added and measured**. The real run
+(`notebooks/colab_vision_gpu.ipynb`, Colab T4, `Qwen/Qwen2.5-VL-3B-Instruct`
+bf16) covered project `5398e39c-d35b-481a-b580-42d7224732eb`, 120.078s window
+(opening credits → opening monologue — **Portuguese-dubbed clip this time**;
+English is the norm for normal runs), 33 scenes, **33/33 scenes vision-enriched**
+(`provenance=qwen3vl`), ~3.6s/scene, no OOM. TF-IDF retrieval verdicts: **1 GOOD /
+2 PARTIAL / 5 WRONG**; temporal probe OOM-free but mostly anchored at 0.0s.
+**New**: `SemanticIndex` dense-embedding path (`--method embedding`,
+sentence-transformers; lazy, env-driven, honest failure — never silently falls
+back to TF-IDF). Measured locally on the real corpus with MiniLM: scores lift
+0.02→0.20 range and re-rank (tension query now surfaces the gun-to-mouth
+scene-30 at #2; emphasized-object stays GOOD at #1), but a monolingual-English
+embedder on a Portuguese-dubbed clip only partially bridges narrative queries —
+use `paraphrase-multilingual-MiniLM-L12-v2` for non-English. Full artifacts
+preserved under `data/5398e39c-.../` (gitignored by design — scene cards carry
+the movie's dialogue; the human-verdict record is tracked under `reports/`).
+191 tests pass locally.
 
 ## Executive Summary
 
@@ -31,7 +37,7 @@ The Autonomous Movie Studio project now has a **complete, modular architecture**
 - **Cinematic audio mix**: film-ducking, music-ducking, EBU R128 normalization, true-peak limiter, burned subtitles
 - **Real Qwen script writer** (`script/qwen_writer.py`) integrated into the orchestrator
 - **Provider manifest** (`provider_manifest.json`) recording exactly which providers/models executed
-- **183+ passing tests** (fast suite ~3-4 min) with zero regressions; real-model tests explicitly gated
+- **191+ passing tests** (fast suite ~3-4 min) with zero regressions; real-model tests explicitly gated
 
 ## Current Architecture
 
@@ -375,11 +381,17 @@ providers:
     as "THE JUST BROTHERS"/"CLUB", a title card as "Davty Flatcher", and
     hallucinated a "gun-in-mouth" confusion in places. **Confidence ≠
     correctness** (scene-29 scored 0.88 while including a hallucinated title).
-11. **Retrieval is TF-IDF word-overlap only (real-run measured)** - the 8-query
-    milestone eval scored **1 GOOD / 2 PARTIAL / 5 WRONG**: it is good when the
-    query vocabulary literally appears in the vision fields (emphasized object),
-    and fails every narrative/thematic query (fate, contradiction, choice-vs-
-    control). No semantic/embedding layer yet.
+11. **Retrieval was TF-IDF word-overlap only — now has a dense-embedding path
+    (measured)**: the TF-IDF 8-query eval scored **1 GOOD / 2 PARTIAL / 5
+    WRONG** (good when query vocabulary literally appears in vision fields).
+    The new `--method embedding` path (sentence-transformers, lazy/env-driven,
+    honest failure) lifts scores ~0.02→0.20 and re-ranks meaningfully — on the
+    real corpus with MiniLM the tension query surfaced the gun-to-mouth scene-30
+    at #2 and the emphasized-object query stayed GOOD at #1 — but still does not
+    fix narrative/thematic queries (fate, contradiction, choice-vs-control) and
+    **MiniLM is monolingual-English**: use
+    `RETRIEVAL_EMBEDDER_MODEL=sentence-transformers/paraphrase-multilingual-
+    MiniLM-L12-v2` for non-English clips. LLM-based retrieval is the next lever.
 
 ## Test Commands
 
@@ -450,8 +462,18 @@ python src/main.py run --project-id <id>
   unanchored (0.0s). Full artifacts preserved under
   `data/5398e39c-.../` + `reports/` (gitignored by design); the human-verdict
   retrieval record is tracked at `data/5398e39c-.../reports/retrieval_evaluation.json`.
-- ✅ Local E2E: 183 tests pass (vision, artifacts, retrieval, editorial
-  orchestrator, movie-understanding suites); editorial orchestrator test proves all artifacts
+- ✅ **Dense-embedding retrieval layer**: `SemanticIndex` now supports
+  `build(..., embedder=...)` — corpus dense vectors computed at build time,
+  cosine search (TF-IDF stays the default/fallback). `embedding_retriever.py`
+  (`SentenceEmbedder` lazy sentence-transformers + env-driven factory
+  `RETRIEVAL_EMBEDDER`/`RETRIEVAL_EMBEDDER_MODEL`/`RETRIEVAL_DEVICE`);
+  `scripts/evaluate_retrieval.py --method embedding [--embedder module:attr]`
+  refuses to silently fall back to TF-IDF. **Measured on the real corpus
+  (MiniLM)**: scores 0.02→0.20, tension→scene-30 gun-to-mouth at #2, object→
+  stays #1; narrative queries still sub-GOOD (MiniLM is English-only — use the
+  multilingual model for non-English clips). 8 new tests.
+- ✅ Local E2E: 191 tests pass (vision, artifacts, retrieval, editorial
+  orchestrator, movie-understanding, semantic-embedding suites); editorial orchestrator test proves all artifacts
 
 ### 1. Timeline-Based Rendering Integration
 - ✅ Connect existing orchestrator to timeline system
@@ -678,14 +700,40 @@ grep -A 20 "profiles:" configs/profiles.yaml
 
 - **Modified**:
   - Documentation: `PROJECT_STATUS.md` (real-run summary, honest verdicts,
-    real-known-limitations, 183-test count), `DEVELOPMENT_ROADMAP.md`,
+    real-known-limitations, 191-test count), `DEVELOPMENT_ROADMAP.md`,
     `NEXT_MILESTONE.md` (milestone completed with measurements; next bottleneck
     is retrieval semantics + temporal localization)
+
+## Files Changed This Session (Dense-Embedding Retrieval)
+
+- **Created**:
+  - `src/movie_understanding/embedding_retriever.py` — `SentenceEmbedder`
+    (lazy sentence-transformers, env-driven model/device) +
+    `create_embedder_from_env()` (`RETRIEVAL_EMBEDDER` = `sentence-transformers`
+    or `module:attr` factory; never loads a model at creation)
+  - `tests/test_semantic_embeddings.py` — 8 tests: synonym-query embedding vs
+    TF-IDF (embedding finds the diner scene TF-IDF misses), method tags/dense
+    cosine, empty corpus, eval-harness embedding wiring via a stub
+    `module:attr` embedder, honest failure when the embedder is missing, env
+    parsing
+- **Modified**:
+  - `src/movie_understanding/semantic_index.py` — `build(..., embedder=)`
+    computes dense doc vectors at build time; `search()` cosine (+ transcript /
+    dialogue overlap); TF-IDF stays the default; removed the legacy
+    `_cosine_dict` helper
+  - `scripts/evaluate_retrieval.py` — `--method {tfidf,embedding}` +
+    `--embedder module:attr`; JSON/MD record the method; **exits non-zero with
+    an actionable message instead of silently falling back to TF-IDF**
+  - `scripts/colab_vision_setup.sh` — installs `sentence-transformers`
+  - `notebooks/colab_vision_gpu.ipynb` — Cell 7b has a `METHOD`
+    `tfidf`/`embedding` form; markdown explains the embedding pass
+  - Documentation: `PROJECT_STATUS.md`, `NEXT_MILESTONE.md`,
+    `DEVELOPMENT_ROADMAP.md` (measurement recorded)
 
 ## Test Results
 
 ```
-183 fast tests ............................ PASS (incl. editorial, movie_understanding, vision, artifacts, retrieval suites)
+191 fast tests ............................ PASS (incl. editorial, movie_understanding, vision, artifacts, retrieval, semantic-embedding suites)
 ```
   - 26 Qwen provider tests (incl. placeholder-guard + plain-text fallback)
   - 10 Creative director tests
@@ -707,13 +755,13 @@ grep -A 20 "profiles:" configs/profiles.yaml
 3 skipped (real-TTS GPU tests + real-TTS benchmark — gated behind STUDIO_RUN_REAL_TESTS=1 + CUDA)
 11 deselected (slow / llm_integration)
 ─────────────────────────────────────────
-TOTAL: 183 passing, 0 failures
+TOTAL: 191 passing, 0 failures
 
 ## Status for Handoff
 
 ✅ **Architecture**: Complete and validated
 ✅ **Local Development**: Ready on weak laptops
-✅ **Testing**: Comprehensive, fast (183 passing, ~3-4 min)
+✅ **Testing**: Comprehensive, fast (191 passing, ~3-4 min)
 ✅ **Multi-Scene Cut**: Selection, extraction, timeline, render, and QC wired end-to-end
 ✅ **Typed Evidence Selection**: Director-driven evidence typing used by selection
 ✅ **Real Script Provider**: Qwen narration writer integrated into the orchestrator

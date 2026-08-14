@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-echo "== [1/4] Ensure a Transformers build with Qwen VL support =="
+echo "== [1/5] Ensure a Transformers build with Qwen VL support =="
 # The base colab_setup.sh pins to a transformers that supports Qwen3 chunked
 # thinking; Qwen2.5-VL / Qwen3-VL are exposed via AutoProcessor + AutoModel as
 # long as the installed transformers is recent enough. Upgrade when a feature
@@ -38,13 +38,16 @@ print("   transformers now:", transformers.__version__, "(Qwen2.5-VL OK)")
 PY
 fi
 
-echo "== [2/4] bitsandbytes (optional 4-bit Qwen-VL when VRAM is tight) =="
+echo "== [2/5] bitsandbytes (optional 4-bit Qwen-VL when VRAM is tight) =="
 python -m pip install -q bitsandbytes || echo "   bitsandbytes install failed (4-bit mode unavailable; fp16 still works)"
 
-echo "== [3/4] Pillow + gdown (keyframes + Drive movie download) =="
+echo "== [3/5] Pillow + gdown (keyframes + Drive movie download) =="
 python -m pip install -q pillow gdown || echo "   (optional deps failed)"
 
-echo "== [4/4] Verify =="
+echo "== [4/5] sentence-transformers (dense-embedding retrieval, RETRIEVAL_EMBEDDER) =="
+python -m pip install -q sentence-transformers || echo "   sentence-transformers install failed (embedding retrieval will be unavailable; TF-IDF still works)"
+
+echo "== [5/5] Verify =="
 python - <<'PY'
 import shutil, torch, transformers
 from PIL import Image  # noqa: F401

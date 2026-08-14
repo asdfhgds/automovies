@@ -12,14 +12,25 @@ left blank for a human reviewer to fill in after inspecting the top results,
 per the validation milestone. Nothing here fakes accuracy: the automated
 fields are the scene ids / timestamps / scores the index actually returned.
 
+Two retrieval methods are supported:
+
+- ``--method tfidf`` (default) — TF-IDF cosine + transcript/dialogue overlap.
+- ``--method embedding`` — dense-embedding cosine (sentence-transformers, or a
+  ``module:attr`` factory via ``--embedder`` / ``RETRIEVAL_EMBEDDER``). If the
+  requested embedder cannot be created, the harness exits **non-zero** with an
+  actionable message instead of silently substituting TF-IDF scores.
+
 Usage::
 
     python scripts/evaluate_retrieval.py --project data/<project-id>
+    python scripts/evaluate_retrieval.py --project data/<project-id> --method embedding
 
 Optional: ``--k 5`` (top results per query), ``--queries path/to/queries.json``
-to supply your own query list (a JSON array of strings).
+to supply your own query list (a JSON array of strings), ``--embedder
+module:attr`` to force a specific embedder factory.
 """
 import argparse
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -27,6 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from movie_understanding.embedding_retriever import create_embedder_from_env  # noqa: E402
 from movie_understanding.semantic_index import SemanticIndex  # noqa: E402
 
 # Evaluation queries for this validation milestone. These deliberately require
@@ -41,6 +53,11 @@ EVAL_QUERIES = [
     "Who is present in this scene and what are they doing?",
     "When does the most important visual event occur?",
 ]
+
+METHOD_LABELS = {
+    "tfidf": "TF-IDF semantic + transcript + dialogue overlap.",
+    "embedding": "Dense embeddings (cosine) + transcript + dialogue overlap.",
+}
 
 
 def load_project(project_dir: Path):
@@ -57,14 +74,36 @@ def load_project(project_dir: Path):
     return movie_index, semantic
 
 
-def build_index(movie_index: dict) -> SemanticIndex:
+def get_embedder(embedder_spec: str):
+    """Create an embedder from ``module:attr`` or the environment.
+
+    Raises ImportError/ValueError with an actionable message when unavailable.
+    """
+    if embedder_spec:
+        module_name, attr_name = embedder_spec.split(":", 1)
+        module = importlib.import_module(module_name)
+        factory = getattr(module, attr_name)
+        embedder = factory()
+        if not callable(embedder):
+            raise ValueError(
+                f"--embedder {embedder_spec!r}: {attr_name}() did not return a "
+                "callable embedder")
+        return embedder
+    return create_embedder_from_env()
+
+
+def build_index(movie_index: dict, method: str = "tfidf", embedder=None) -> SemanticIndex:
     index = SemanticIndex()
-    index.build(movie_index.get("scenes", []))
+    if method == "embedding":
+        index.build(movie_index.get("scenes", []), embedder=embedder)
+    else:
+        index.build(movie_index.get("scenes", []))
     return index
 
 
-def run_queries(movie_index: dict, queries, k: int) -> list:
-    index = build_index(movie_index)
+def run_queries(movie_index: dict, queries, k: int,
+                method: str = "tfidf", embedder=None) -> list:
+    index = build_index(movie_index, method=method, embedder=embedder)
     scenes_by_id = {s.get("scene_id"): s for s in movie_index.get("scenes", [])}
     records = []
     for query in queries:
@@ -95,19 +134,20 @@ def run_queries(movie_index: dict, queries, k: int) -> list:
     return records
 
 
-def write_report(project_dir: Path, records: list) -> Path:
+def write_report(project_dir: Path, records: list, method: str) -> Path:
     report_dir = Path(project_dir) / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     json_path = report_dir / "retrieval_evaluation.json"
     json_path.write_text(
-        json.dumps({"method": "tfidf", "queries": records}, ensure_ascii=False, indent=2),
+        json.dumps({"method": method, "queries": records},
+                   ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
     lines = [
         "# Retrieval Evaluation",
         "",
-        "Method: TF-IDF semantic + transcript + dialogue overlap.",
+        f"Method: {METHOD_LABELS.get(method, method)}",
         "",
         "Assessment scale: **GOOD** / **PARTIAL** / **WRONG** "
         "(fill in the table by hand).",
@@ -134,16 +174,32 @@ def main() -> None:
     parser.add_argument("--project", required=True, help="project directory (data/<id>)")
     parser.add_argument("--k", type=int, default=5, help="top results per query")
     parser.add_argument("--queries", default=None, help="optional JSON array of queries")
+    parser.add_argument("--method", choices=("tfidf", "embedding"), default="tfidf",
+                        help="retrieval method (default: tfidf)")
+    parser.add_argument("--embedder", default=None,
+                        help="module:attr embedder factory (overrides RETRIEVAL_EMBEDDER)")
     args = parser.parse_args()
 
     queries = EVAL_QUERIES
     if args.queries:
         queries = json.loads(Path(args.queries).read_text(encoding="utf-8"))
 
+    embedder = None
+    if args.method == "embedding":
+        try:
+            embedder = get_embedder(args.embedder)
+        except (ImportError, ValueError) as exc:
+            print(f"embedding method unavailable: {exc}", file=sys.stderr)
+            print("Install sentence-transformers or set RETRIEVAL_EMBEDDER / "
+                  "--embedder to a working module:attr factory; refusing to "
+                  "silently fall back to TF-IDF.", file=sys.stderr)
+            sys.exit(2)
+
     movie_index, _ = load_project(Path(args.project))
-    records = run_queries(movie_index, queries, args.k)
-    out = write_report(Path(args.project), records)
-    print(f"Wrote {out}")
+    records = run_queries(movie_index, queries, args.k,
+                          method=args.method, embedder=embedder)
+    out = write_report(Path(args.project), records, args.method)
+    print(f"Wrote {out}  (method={args.method})")
     for r in records:
         print(f"  top={r['top_scene_ids']}  {r['query'][:70]}")
 

@@ -2,14 +2,14 @@
 
 Retrieval over enriched scenes. Combines:
 
-- semantic similarity (TF-IDF cosine by default; an optional embedder function
-  can be plugged in),
+- semantic similarity (TF-IDF cosine by default; an optional dense embedder can
+  be plugged in at ``build()`` time — see ``embedding_retriever.py``),
 - lexical transcript relevance (keyword overlap),
-- dialogue relevance (query terms spoken on screen),
-- director requirements (weighted query terms).
+- dialogue relevance (query terms spoken on screen).
 
-The lexical path is always available and used as a fallback so the editor never
-silently loses the ability to find evidence when embeddings are unavailable.
+The lexical path is always available and used as the default so the editor
+never silently loses the ability to find evidence when embeddings are
+unavailable.
 """
 from typing import Callable, Dict, List, Optional
 
@@ -19,10 +19,14 @@ from movie_understanding import text_utils
 class SemanticIndex:
     """Builds and queries an index over enriched scenes."""
 
-    def __init__(self, embedder: Optional[Callable[[List[str]], List[list]]] = None):
-        # embedder(texts) -> list of vectors; when provided it overrides TF-IDF
-        # for the similarity term. Optional and never required.
+    def __init__(
+        self,
+        embedder: Optional[Callable[[List[str]], List[list]]] = None,
+    ):
+        # embedder(texts) -> list of dense vectors; when provided, dense
+        # cosine similarity overrides TF-IDF for the semantic term. Optional.
         self.embedder = embedder
+        self._doc_vectors: Optional[List[list]] = None
         self._entries: List[dict] = []
         self._idf: Dict[str, float] = {}
 
@@ -30,9 +34,20 @@ class SemanticIndex:
     # Build
     # ------------------------------------------------------------------
 
-    def build(self, enriched_scenes: List[dict]) -> "SemanticIndex":
-        """Index a list of enriched scenes (each has ``story.summary`` etc.)."""
-        docs = self._corpus(enriched_scenes)
+    def build(self, enriched_scenes: List[dict],
+              embedder: Optional[Callable[[List[str]], List[list]]] = None
+              ) -> "SemanticIndex":
+        """Index a list of enriched scenes (each has ``story.summary`` etc.).
+
+        When an ``embedder`` is supplied (or was passed to the constructor),
+        dense vectors are computed for the whole corpus at build time and
+        ``search()`` ranks with cosine similarity against the embedded query.
+        TF-IDF remains the default and the always-available fallback.
+        """
+        if embedder is not None:
+            self.embedder = embedder
+        texts = self._corpus_texts(enriched_scenes)
+        docs = [text_utils.tokenize(t) for t in texts]
         self._idf = _idf(docs)
         self._entries = []
         for scene, doc in zip(enriched_scenes, docs):
@@ -55,14 +70,18 @@ class SemanticIndex:
                 ),
                 "vector": _tfidf(doc, self._idf),
             })
+        self._doc_vectors = None
+        if self.embedder is not None:
+            # [] marks "embedder supplied but no corpus"; None marks "tfidf".
+            self._doc_vectors = list(self.embedder(texts)) if texts else []
         return self
 
     @staticmethod
-    def _corpus(enriched_scenes: List[dict]) -> List[dict]:
-        docs = []
+    def _corpus_texts(enriched_scenes: List[dict]) -> List[str]:
+        texts = []
         for scene in enriched_scenes:
             story = scene.get("story", {})
-            text = " ".join([
+            texts.append(" ".join([
                 scene.get("transcript") or "",
                 story.get("summary") or "",
                 story.get("location") or "",
@@ -76,9 +95,15 @@ class SemanticIndex:
                 " ".join(story.get("emotional_cues") or []),
                 " ".join(story.get("themes") or []),
                 " ".join(d.get("text", "") for d in story.get("dialogue", [])),
-            ])
-            docs.append(text_utils.tokenize(text))
-        return docs
+            ]))
+        return texts
+
+    @staticmethod
+    def _corpus(enriched_scenes: List[dict]) -> List[list]:
+        return [
+            text_utils.tokenize(t)
+            for t in SemanticIndex._corpus_texts(enriched_scenes)
+        ]
 
     # ------------------------------------------------------------------
     # Query
@@ -103,9 +128,11 @@ class SemanticIndex:
         if not q_tokens:
             return []
 
-        if self.embedder is not None:
-            vecs = self.embedder([query])
-            sem = _cosine_dict(vecs[0]) if vecs else {}
+        if self._doc_vectors is not None:
+            qv = list(self.embedder([query])[0])
+            sem = {}
+            for entry, doc_vec in zip(self._entries, self._doc_vectors):
+                sem[entry["scene_id"]] = _cosine_list(qv, doc_vec)
         else:
             q_vec = _tfidf(q_tokens, self._idf)
             sem = {}
@@ -135,7 +162,7 @@ class SemanticIndex:
 
     def to_dict(self) -> dict:
         return {
-            "method": "tfidf" if self.embedder is None else "embedder",
+            "method": "tfidf" if self._doc_vectors is None else "embedder",
             "scenes": [
                 {
                     "scene_id": e["scene_id"],
@@ -198,8 +225,13 @@ def _cosine(a: Dict[str, float], b: Dict[str, float]) -> float:
     return num / (den_a * den_b)
 
 
-def _cosine_dict(flat_vector: list) -> Dict[str, float]:
-    return {str(i): float(v) for i, v in enumerate(flat_vector)}
+def _cosine_list(a: list, b: list) -> float:
+    if not a or len(a) != len(b):
+        return 0.0
+    num = sum(x * y for x, y in zip(a, b))
+    den_a = sum(x * x for x in a) ** 0.5 or 1.0
+    den_b = sum(y * y for y in b) ** 0.5 or 1.0
+    return num / (den_a * den_b)
 
 
 def _rationale(scene_id: str, sem: float, tr: float, dl: float) -> str:

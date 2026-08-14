@@ -11,7 +11,7 @@
   editorial timeline (excerpts), editorial FFmpeg renderer
 - ✅ Orchestrator `EDITORIAL_MODE=true` wired end-to-end; QC covers the
   editorial cut
-- ✅ 183 tests pass locally (vision + editorial + movie-understanding + artifacts + retrieval suites added)
+- ✅ 191 tests pass locally (vision + editorial + movie-understanding + artifacts + retrieval + semantic-embedding suites added)
 - ✅ GPU validation notebooks: `colab_editorial_gpu.ipynb`, `colab_vision_gpu.ipynb` —
   `colab_vision_gpu.ipynb` **executed on a real T4** (project `5398e39c...`,
   `Qwen/Qwen2.5-VL-3B-Instruct` bf16, 33/33 scenes enriched, no OOM)
@@ -51,9 +51,18 @@
 - ✅ **Temporal probe** (`Qwen3VLEnricher.probe_temporal`): orders visual
   events with approximate timestamps across N keyframes; honest when it cannot
   localize
-- ✅ 44 vision/artifact/retrieval tests; **183 total passing**
+- ✅ 44 vision/artifact/retrieval tests; **191 total passing**
 - ✅ `scripts/colab_vision_setup.sh` + `notebooks/colab_vision_gpu.ipynb`
   (cells 7/7b/7c produce all artifacts, retrieval eval, temporal probe)
+- ✅ **Dense-embedding retrieval (built + measured)**: `SemanticIndex`
+  `build(..., embedder=)` dense path (cosine; TF-IDF default),
+  `embedding_retriever.py` (lazy sentence-transformers,
+  `RETRIEVAL_EMBEDDER`/`RETRIEVAL_EMBEDDER_MODEL`/`RETRIEVAL_DEVICE`),
+  `evaluate_retrieval.py --method embedding [--embedder module:attr]` fails
+  loudly rather than silently falling back. MiniLM measurement on the real
+  corpus: scores ~0.02→0.20, tension→scene-30 (gun-to-mouth) at #2, object
+  stays #1; narrative queries still miss on the PT clip (use the multilingual
+  model for non-English)
 - ✅ **Real Qwen3-VL movie-understanding run EXECUTED** on a Colab T4 with a
   user-supplied movie (project `5398e39c-d35b-481a-b580-42d7224732eb`):
   `Qwen/Qwen2.5-VL-3B-Instruct` bf16, 120.078s window (Portuguese-dubbed clip; English is the norm), 33/33 scenes enriched
@@ -359,8 +368,12 @@ Improve quality and reduce costs through iteration.
 5. ✅ **Validated Movie Intelligence on the real movie** — `colab_vision_gpu.ipynb`
    normal run on a T4: 33/33 scenes vision-enriched, ~3.6s/scene, no OOM;
    retrieval eval 1 GOOD / 2 PARTIAL / 5 WRONG, temporal probe OOM-free/weak
-   anchors (project `5398e39c...`). Next: semantic retrieval layer + feed the
-   validated scene knowledge into the Creative Director
+   anchors (project `5398e39c...`)
+5b. ✅ **Dense-embedding retrieval layer built + measured** — `--method embedding`
+   (lazy sentence-transformers, honest failure); MiniLM: scores 0.02→0.20,
+   tension→scene-30 #2, object #1, but narrative queries still miss on the PT
+   clip. Next: LLM/multilingual retrieval validated on an English movie, then
+   feed the validated scene knowledge into the Creative Director
 6. ⏳ Evaluate several real videos; pick next milestone from the largest visible weakness
 
 ### Medium Priority (Do After)
