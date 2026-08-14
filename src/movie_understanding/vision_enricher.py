@@ -21,6 +21,7 @@ turns that degradation into a hard error instead.
 """
 import json
 import logging
+import os
 import re
 from typing import List, Optional
 
@@ -419,7 +420,7 @@ Answer now:"""
         # to a fixed longest side so the token layout is uniform and small
         # (also speeds up generation on a T4). Override with
         # VISION_MAX_IMAGE_PX=<pixels> (0 disables).
-        _max_side = int(_os.environ.get("VISION_MAX_IMAGE_PX", "560"))
+        _max_side = int(os.environ.get("VISION_MAX_IMAGE_PX", "560"))
         if _max_side > 0:
             _resized = []
             for _im in images:
