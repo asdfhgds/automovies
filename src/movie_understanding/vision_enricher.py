@@ -413,6 +413,30 @@ Answer now:"""
         _gen_start = _time.monotonic()
         images = [Image.open(p).convert("RGB") for p in image_paths]
 
+        # Qwen2.5-VL's fast image processor can emit a placeholder/image-token
+        # mismatch for some frame resolutions (device-side assert in
+        # "inputs_embeds[image_mask] = image_embeds"). Downscale every keyframe
+        # to a fixed longest side so the token layout is uniform and small
+        # (also speeds up generation on a T4). Override with
+        # VISION_MAX_IMAGE_PX=<pixels> (0 disables).
+        _max_side = int(_os.environ.get("VISION_MAX_IMAGE_PX", "560"))
+        if _max_side > 0:
+            _resized = []
+            for _im in images:
+                _w, _h = _im.size
+                _longest = max(_w, _h)
+                if _longest > _max_side:
+                    _scale = _max_side / _longest
+                    _resized.append(
+                        _im.resize(
+                            (max(1, int(_w * _scale)), max(1, int(_h * _scale))),
+                            Image.LANCZOS,
+                        )
+                    )
+                else:
+                    _resized.append(_im)
+            images = _resized
+
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {
