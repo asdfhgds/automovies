@@ -11,8 +11,10 @@
   editorial timeline (excerpts), editorial FFmpeg renderer
 - ✅ Orchestrator `EDITORIAL_MODE=true` wired end-to-end; QC covers the
   editorial cut
-- ✅ 178 tests pass locally (vision + editorial + movie-understanding + artifacts + retrieval suites added)
-- ⏳ GPU validation notebooks: `colab_editorial_gpu.ipynb`, `colab_vision_gpu.ipynb`
+- ✅ 183 tests pass locally (vision + editorial + movie-understanding + artifacts + retrieval suites added)
+- ✅ GPU validation notebooks: `colab_editorial_gpu.ipynb`, `colab_vision_gpu.ipynb` —
+  `colab_vision_gpu.ipynb` **executed on a real T4** (project `5398e39c...`,
+  `Qwen/Qwen2.5-VL-3B-Instruct` bf16, 33/33 scenes enriched, no OOM)
 
 ### Vision Scene Enrichment (Qwen3-VL) — Built + Tested, Real-Movie Run Pending
 - ✅ `src/movie_understanding/keyframes.py` — FFmpeg keyframe extraction per
@@ -49,11 +51,16 @@
 - ✅ **Temporal probe** (`Qwen3VLEnricher.probe_temporal`): orders visual
   events with approximate timestamps across N keyframes; honest when it cannot
   localize
-- ✅ 44 vision/artifact/retrieval tests; **178 total passing**
+- ✅ 44 vision/artifact/retrieval tests; **183 total passing**
 - ✅ `scripts/colab_vision_setup.sh` + `notebooks/colab_vision_gpu.ipynb`
   (cells 7/7b/7c produce all artifacts, retrieval eval, temporal probe)
-- ⏳ Real Qwen3-VL movie-understanding run on a T4 with a user-supplied movie
-  (pending — the validation milestone)
+- ✅ **Real Qwen3-VL movie-understanding run EXECUTED** on a Colab T4 with a
+  user-supplied movie (project `5398e39c-d35b-481a-b580-42d7224732eb`):
+  `Qwen/Qwen2.5-VL-3B-Instruct` bf16, 120.078s window, 33/33 scenes enriched
+  (`provenance=qwen3vl`), ~3.6s/scene, no OOM. Human verdicts: retrieval
+  **1 GOOD / 2 PARTIAL / 5 WRONG** (TF-IDF word-overlap — the measured next
+  weakness); temporal probe OOM-free but mostly unanchored. Full artifacts
+  preserved under `data/5398e39c-.../` + `reports/` (gitignored by design).
 
 ### Foundation: Movie Understanding (Real & Tested)
 - ✅ **Transcription**: Whisper/WhisperX with word-level timestamps
@@ -349,10 +356,10 @@ Improve quality and reduce costs through iteration.
 2. ✅ Script generation via LLM (Qwen) — subsumed by the real script writer
 3. ✅ Real TTS (Phase 2) — Kokoro / Chatterbox / Qwen3-TTS + audio mix + benchmark
 4. ✅ Editorial pipeline (movie intelligence + evidence-driven editorial plan/script/timeline/render) — local E2E proven
-5. ⏳ **Validate Movie Intelligence on the real movie** — run
-   `notebooks/colab_vision_gpu.ipynb` on a T4/A100 with a user-supplied movie:
-   inspect 10+ scenes, run retrieval eval (GOOD/PARTIAL/WRONG), temporal probe,
-   compare old vs new scene knowledge, record performance → then wire the
+5. ✅ **Validated Movie Intelligence on the real movie** — `colab_vision_gpu.ipynb`
+   normal run on a T4: 33/33 scenes vision-enriched, ~3.6s/scene, no OOM;
+   retrieval eval 1 GOOD / 2 PARTIAL / 5 WRONG, temporal probe OOM-free/weak
+   anchors (project `5398e39c...`). Next: semantic retrieval layer + feed the
    validated scene knowledge into the Creative Director
 6. ⏳ Evaluate several real videos; pick next milestone from the largest visible weakness
 

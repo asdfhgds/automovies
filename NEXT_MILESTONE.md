@@ -1,9 +1,14 @@
 # NEXT MILESTONE
 
-**Last Updated**: Movie Intelligence validation *prepared* — all tooling to run
-the real Qwen3-VL scene analysis + retrieval eval on a Colab T4 is built and
-tested (178 fast tests pass). The real-movie run itself is **pending** (needs a
-user-supplied movie on a GPU runtime).
+**Last Updated**: Movie Intelligence validation milestone **completed on a real
+movie**. `notebooks/colab_vision_gpu.ipynb` ran end-to-end on a Colab T4 with
+`Qwen/Qwen2.5-VL-3B-Instruct` (bf16): project `5398e39c-d35b-481a-b580-42d7224732eb`,
+120.078s window, 33 scenes, 33/33 enriched (`provenance=qwen3vl`), ~3.6s/scene,
+no OOM. Milestone verdicts (human): retrieval **1 GOOD / 2 PARTIAL / 5 WRONG**
+(TF-IDF has no semantic reasoning) and temporal probe works but mostly unanchored.
+183 fast tests pass. **Next bottleneck: retrieval semantics + temporal localization.**
+Full artifacts preserved under `data/5398e39c-.../` (gitignored by design); the
+retrieval human-verdict record is tracked in `reports/`.
 
 ## Status Tags
 
@@ -41,18 +46,28 @@ user-supplied movie on a GPU runtime).
   - **Temporal probe**: `Qwen3VLEnricher.probe_temporal()` orders visual events
     with *approximate* timestamps from N keyframes spread across the scene; it
     reports honestly when it cannot localize an event to a time.
-  - Local E2E: **178 fast tests pass** (vision, artifacts, retrieval, editorial,
+  - Local E2E: **183 fast tests pass** (vision, artifacts, retrieval, editorial,
     movie-understanding suites).
+  - **Real-movie run executed (Colab T4)**: project `5398e39c-d35b-481a-b580-
+    42d7224732eb` — `Qwen/Qwen2.5-VL-3B-Instruct` (bf16), 120.078s window,
+    33/33 scenes vision-enriched, ~3.6s/scene, no OOM; all artifacts (scene
+    index v2, semantic index, understanding report, retrieval eval, temporal
+    probe) preserved under `data/5398e39c-.../` + `reports/` (gitignored by
+    design).
 
 - **EXPERIMENTAL**
-  - Qwen3-VL real-model path — the `.to()` fix is proven on a real T4 (the
-    previous run loaded the 7B model with offload to CPU without crashing), but
-    the *full* vision scene-analysis + retrieval-eval run has **not yet been
-    executed end-to-end against the real movie**.
-  - Temporal event localization — `probe_temporal` exists and is unit-tested,
-    but real-frame quality is unverified (this milestone's job).
-  - Evidence retrieval (semantic TF-IDF + lexical + dialogue overlap) — now
-    includes vision fields; no embedder/LLM yet.
+  - Qwen3-VL real-model path — **executed end-to-end on a real T4** (33 scenes,
+    33/33 enriched, no OOM, ~3.6s/scene). Remaining gaps measured, not assumed:
+    OCR/transcript misreads ("Talier Durden" for "Tyler Durden", hallucinated
+    title cards, "THE JUST BROTHERS" for "Fight Club") and confidence-≠-correctness.
+  - Temporal event localization — the probe runs OOM-free (per-frame single-image
+    sampling), but events mostly anchor to `time_sec: 0.0` (only scene-32 got a
+    real anchor, 116.43s). Real-frame quality is **weak**; not full-video event
+    detection.
+  - Evidence retrieval (semantic TF-IDF + lexical + dialogue overlap) — includes
+    vision fields, but the 8-query human eval measured **1 GOOD / 2 PARTIAL /
+    5 WRONG**: works for literal vocabulary (emphasized object), fails every
+    narrative/thematic query. No embedder/LLM yet.
   - Editorial narration is deterministic around the real (Qwen) thesis — not yet an LLM editorial writer.
   - Real TTS (Kokoro priority) — quality/performance needs a real-GPU eval.
 
@@ -65,44 +80,42 @@ user-supplied movie on a GPU runtime).
     `confidence`) are only filled when `VISION_ENRICHER=qwen3vl` runs on CUDA;
     the heuristic enricher still leaves them `None` + provenance-flagged
     (honest, by design).
-  - Semantic retrieval is TF-IDF only — it matches the *words* of the vision
-    fields, not true semantic embeddings. Queries that rephrase without any
-    shared vocabulary will miss (this is exactly what the retrieval eval
-    measures).
-  - `device_map="auto"` on a 16GB T4 offloads some 7B-VL weights to CPU —
-    slower per-scene generation, and peak VRAM < full model. Documented, not
-    hidden.
-  - Temporal timestamps are model-approximate and frame-sampling-dependent
-    (evenly spaced keyframes, not full-video event detection).
+  - Semantic retrieval is TF-IDF only — measured on the real movie: **1 GOOD /
+    2 PARTIAL / 5 WRONG** across the 8 milestone queries. It matches the *words*
+    of the vision fields, not meaning; queries that rephrase without shared
+    vocabulary miss (fate, contradiction, choice-vs-control all FAIL).
+  - `device_map="auto"` on a 16GB T4 offloads some 7B-VL weights to CPU; the
+    validated run used 3B bf16 (no offload, ~6s/scene). `VISION_DTYPE=4bit`,
+    `VISION_ATTN=eager`, `VISION_MAX_IMAGE_PX=560` are the proven band-aids.
+  - Temporal timestamps are model-approximate and frame-sampling-dependent —
+    real-run evidence: most events anchored at `time_sec: 0.0`; treat any
+    timestamp as "within this scene, unplaced".
+  - OCR / transcript slips (real-run): "Talier Durden" for "Tyler Durden",
+    hallucinated title cards ("Davty Flatcher", "THE JUST BROTHERS"); model
+    confidence (0.88 on scene-29) does **not** imply correctness.
   - Captions are chunked short (≤3 words) but timed by even distribution unless real word timestamps exist.
   - TTS emotion/pace control is approximate per provider (Kokoro voice+speed; not true expressive control).
 
-- **CURRENT BOTTLENECK**: real-model proof of *understanding quality*. Local
-  tests prove the interfaces/fallback/strict contracts and that the retrieval
-  index consumes vision fields, but Qwen3-VL on a real GPU (keyframe → visual
-  story card quality, retrieval GOOD/PARTIAL/WRONG, temporal localization) is
-  unverified against the real movie.
+- **CURRENT BOTTLENECK**: retrieval *semantics*. The real run proved keyframes →
+  Qwen3-VL → rich, honest story cards at ~3.6s/scene on a T4, but the retrieval
+  step reads them by word overlap: query quality is 1/8 GOOD. Until retrieval
+  has an embedding (or LLM) layer, the scene knowledge can't be reliably turned
+  into an evidence-driven editorial plan find. Secondary bottleneck: temporal
+  event localization (currently scene-scoped, not time-scoped).
 
-- **NEXT ACTION** (validation milestone, in order)
-  1. Run `notebooks/colab_vision_gpu.ipynb` on a GPU runtime with a user-supplied
-     movie (T4, `REQUIRE_REAL_VISION=true`; trim 60–180s first; keep
-     `device_map=auto`; drop `VISION_DTYPE=4bit` if generation OOMs).
-  2. Cells 7–9: inspect 10+ scene cards (location/actions/objects/visual
-     description/events/cues/themes/mood/cinematography/confidence grounded in
-     each frame), log drift cases.
-  3. Cell 7b: run retrieval eval → fill `human_assessment`
-     (GOOD/PARTIAL/WRONG) in `reports/retrieval_evaluation.json`; inspect top
-     hits manually.
-  4. Cell 7c: run the temporal probe on 3 scenes; record where exact timing
-     holds and where it is weak (document, don't pretend).
-  5. Compare the three scenes the *old* pipeline selected: does the new system
-     know more (visual analysis, characters, actions, events, dialogue, emotion,
-     visual details) than the old transcript/generic-summary output?
-  6. Record performance (GPU, VRAM, model, dtype, device_map, load time, scene
-     count, frames, analysis time, avg time/scene, offload note).
-  7. Record the milestone verdict honestly (PROJECT_STATUS.md): provider
-     COMPLETE; real scene analysis PASS/FAIL; retrieval GOOD/PARTIAL/WRONG;
-     temporal GOOD/PARTIAL/WRONG; T4 VRAM; model; runtime; limitations.
-  8. Do NOT start TTS/script/image/video/editing work yet. If intelligence is
-     useful, the next task is Movie Intelligence → Creative Director → evidence
-     retrieval → editorial plan using the validated scene knowledge.
+- **NEXT ACTION** (after the completed validation run)
+  1. **Add a semantic retrieval layer**: embed the story-card corpus (vision +
+     transcript fields) with the same Qwen3-VL/LLM (or a small embedder) and
+     re-run `scripts/evaluate_retrieval.py` — target flipping the measured
+     1/8 GOOD upward and turning PARTIALs into GOODs without losing Q4.
+  2. **Strengthen temporal localization**: extend `probe_temporal()` to emit a
+     short "when does X happen" answer per event cluster rather than scene-scoped
+     0.0 anchors; consider denser keyframes on the loudest segment only.
+  3. **Add OCR/transcript guardrails**: spell-check pass over vision-extracted
+     text/names against the transcript+title list ("Tyler Durden" ≠ "Talier
+     Durden"); suppress clearly-hallucinated title cards.
+  4. Feed the *validated* scene knowledge into the Creative Director / editorial
+     plan: select scenes by the semantic + object evidence now proven to be real.
+  5. Then the next GPU proof: real-movie + real-TTS editorial render
+     (`colab_real_movie_tts.ipynb`), then evaluate several real videos and pick
+     the next milestone from the largest visible weakness.

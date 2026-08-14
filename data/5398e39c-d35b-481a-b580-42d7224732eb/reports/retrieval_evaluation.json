@@ -1,0 +1,375 @@
+{
+  "method": "tfidf",
+  "queries": [
+    {
+      "query": "Find a scene where one character appears to have a choice but another character controls the situation.",
+      "top_scene_ids": [
+        "scene-6",
+        "scene-18",
+        "scene-27",
+        "scene-25",
+        "scene-31"
+      ],
+      "timestamps": [
+        {
+          "start_sec": 21.521522,
+          "end_sec": 23.690357
+        },
+        {
+          "start_sec": 48.25659,
+          "end_sec": 51.384718
+        },
+        {
+          "start_sec": 71.321321,
+          "end_sec": 80.33033
+        },
+        {
+          "start_sec": 63.938939,
+          "end_sec": 65.732399
+        },
+        {
+          "start_sec": 101.810143,
+          "end_sec": 104.020687
+        }
+      ],
+      "scores": [
+        0.1245,
+        0.057,
+        0.0558,
+        0.0536,
+        0.0524
+      ],
+      "model_reason": [
+        "semantic=0.25",
+        "semantic=0.11",
+        "semantic=0.11",
+        "semantic=0.11",
+        "semantic=0.10"
+      ],
+      "human_assessment": "WRONG",
+      "human_notes": "Top hit scene-6 (21.52-23.69s) and the rest of the list are revolver/barman close-ups in the opening credits into the narrator's opening monologue. No scene in this window shows one character making a choice while another controls the situation. TF-IDF matched generic words (choice/control/character) in vision fields without any narrative reasoning; all scores sit near the floor (0.05-0.12)."
+    },
+    {
+      "query": "Find the strongest moment of tension between two characters.",
+      "top_scene_ids": [
+        "scene-4",
+        "scene-29",
+        "scene-14",
+        "scene-30",
+        "scene-8"
+      ],
+      "timestamps": [
+        {
+          "start_sec": 18.309977,
+          "end_sec": 19.436103
+        },
+        {
+          "start_sec": 86.211211,
+          "end_sec": 95.637304
+        },
+        {
+          "start_sec": 40.165165,
+          "end_sec": 41.791792
+        },
+        {
+          "start_sec": 95.637304,
+          "end_sec": 101.810143
+        },
+        {
+          "start_sec": 25.275275,
+          "end_sec": 26.860194
+        }
+      ],
+      "scores": [
+        0.0696,
+        0.0446,
+        0.0421,
+        0.0338,
+        0.0312
+      ],
+      "model_reason": [
+        "semantic=0.14",
+        "semantic=0.09",
+        "semantic=0.08",
+        "semantic=0.07",
+        "semantic=0.06"
+      ],
+      "human_assessment": "PARTIAL",
+      "human_notes": "scene-4 (18.31s revolver close-up) and scene-29 (86.21s bar monologue) rank high, and scene-30 (95.64-101.81s, the narrator with the gun at his mouth -- arguably the tensest beat in the window) appears 4th at 0.0338. Genuinely tense scenes do surface, but the strongest is not ranked first and the score gap is thin (0.0696 -> 0.0312)."
+    },
+    {
+      "query": "Find a scene where the meaning comes mostly from what characters do rather than what they say.",
+      "top_scene_ids": [
+        "scene-10",
+        "scene-8",
+        "scene-19",
+        "scene-17",
+        "scene-25"
+      ],
+      "timestamps": [
+        {
+          "start_sec": 30.780781,
+          "end_sec": 33.700367
+        },
+        {
+          "start_sec": 25.275275,
+          "end_sec": 26.860194
+        },
+        {
+          "start_sec": 51.384718,
+          "end_sec": 54.095762
+        },
+        {
+          "start_sec": 46.129463,
+          "end_sec": 48.25659
+        },
+        {
+          "start_sec": 63.938939,
+          "end_sec": 65.732399
+        }
+      ],
+      "scores": [
+        0.0699,
+        0.0422,
+        0.035,
+        0.0284,
+        0.0235
+      ],
+      "model_reason": [
+        "semantic=0.14",
+        "semantic=0.08",
+        "semantic=0.07",
+        "semantic=0.06",
+        "weak match"
+      ],
+      "human_assessment": "WRONG",
+      "human_notes": "Top hits scene-10 (30.78s) and scene-8 (25.28s) are dialogue/monologue face-and-revolver close-ups where the meaning arrives from speech, not action. The window (title sequence + opening monologue) has no strong action-over-dialogue beat, so the query with no shared vocabulary scores at the floor."
+    },
+    {
+      "query": "Find a moment where an important object is visually emphasized.",
+      "top_scene_ids": [
+        "scene-25",
+        "scene-15",
+        "scene-5",
+        "scene-4",
+        "scene-8"
+      ],
+      "timestamps": [
+        {
+          "start_sec": 63.938939,
+          "end_sec": 65.732399
+        },
+        {
+          "start_sec": 41.791792,
+          "end_sec": 45.378712
+        },
+        {
+          "start_sec": 19.436103,
+          "end_sec": 21.521522
+        },
+        {
+          "start_sec": 18.309977,
+          "end_sec": 19.436103
+        },
+        {
+          "start_sec": 25.275275,
+          "end_sec": 26.860194
+        }
+      ],
+      "scores": [
+        0.1555,
+        0.0722,
+        0.0614,
+        0.0332,
+        0.027
+      ],
+      "model_reason": [
+        "semantic=0.31",
+        "semantic=0.14",
+        "semantic=0.12",
+        "semantic=0.07",
+        "semantic=0.05"
+      ],
+      "human_assessment": "GOOD",
+      "human_notes": "scene-25 (63.94-65.73s, a glowing blue object in extreme close-up, 0.1555 -- the highest single score in the whole eval), scene-15 (41.79s) and scene-4 (18.31s revolver close-up) all center on the revolver/object the cinematography actually emphasizes. This is the one query where the object emphasis genuinely matches on-screen framing."
+    },
+    {
+      "query": "Find a scene that demonstrates the protagonist's relationship with fate.",
+      "top_scene_ids": [
+        "scene-8",
+        "scene-19",
+        "scene-17",
+        "scene-25",
+        "scene-9"
+      ],
+      "timestamps": [
+        {
+          "start_sec": 25.275275,
+          "end_sec": 26.860194
+        },
+        {
+          "start_sec": 51.384718,
+          "end_sec": 54.095762
+        },
+        {
+          "start_sec": 46.129463,
+          "end_sec": 48.25659
+        },
+        {
+          "start_sec": 63.938939,
+          "end_sec": 65.732399
+        },
+        {
+          "start_sec": 26.860194,
+          "end_sec": 30.780781
+        }
+      ],
+      "scores": [
+        0.0811,
+        0.0673,
+        0.0546,
+        0.0451,
+        0.0445
+      ],
+      "model_reason": [
+        "semantic=0.16",
+        "semantic=0.13",
+        "semantic=0.11",
+        "semantic=0.09",
+        "semantic=0.09"
+      ],
+      "human_assessment": "WRONG",
+      "human_notes": "Top hits scene-8 (25.28s), scene-19 (51.38s), scene-17 (46.13s) are monologue/revolver fragments; nothing in this window dramatizes a relationship with fate. Thematic query with no shared vocabulary, so TF-IDF returns floor-scoring word-overlap noise."
+    },
+    {
+      "query": "Find a scene where a character's behavior contradicts what they say.",
+      "top_scene_ids": [
+        "scene-10",
+        "scene-8",
+        "scene-31",
+        "scene-19",
+        "scene-17"
+      ],
+      "timestamps": [
+        {
+          "start_sec": 30.780781,
+          "end_sec": 33.700367
+        },
+        {
+          "start_sec": 25.275275,
+          "end_sec": 26.860194
+        },
+        {
+          "start_sec": 101.810143,
+          "end_sec": 104.020687
+        },
+        {
+          "start_sec": 51.384718,
+          "end_sec": 54.095762
+        },
+        {
+          "start_sec": 46.129463,
+          "end_sec": 48.25659
+        }
+      ],
+      "scores": [
+        0.0531,
+        0.0321,
+        0.0313,
+        0.0266,
+        0.0216
+      ],
+      "model_reason": [
+        "semantic=0.11",
+        "semantic=0.06",
+        "semantic=0.06",
+        "semantic=0.05",
+        "weak match"
+      ],
+      "human_assessment": "WRONG",
+      "human_notes": "scene-10 (30.78s), scene-8 (25.28s), scene-31 (101.81s) are speaking/face shots whose transcript affirms what the character does (e.g. 'can't talk with a gun in your mouth'); there is no contradiction beat in the window. Word-level overlap produces this ranking, not understanding of intent."
+    },
+    {
+      "query": "Who is present in this scene and what are they doing?",
+      "top_scene_ids": [
+        "scene-8",
+        "scene-19",
+        "scene-17",
+        "scene-25",
+        "scene-9"
+      ],
+      "timestamps": [
+        {
+          "start_sec": 25.275275,
+          "end_sec": 26.860194
+        },
+        {
+          "start_sec": 51.384718,
+          "end_sec": 54.095762
+        },
+        {
+          "start_sec": 46.129463,
+          "end_sec": 48.25659
+        },
+        {
+          "start_sec": 63.938939,
+          "end_sec": 65.732399
+        },
+        {
+          "start_sec": 26.860194,
+          "end_sec": 30.780781
+        }
+      ],
+      "scores": [
+        0.0811,
+        0.0673,
+        0.0546,
+        0.0451,
+        0.0445
+      ],
+      "model_reason": [
+        "semantic=0.16",
+        "semantic=0.13",
+        "semantic=0.11",
+        "semantic=0.09",
+        "semantic=0.09"
+      ],
+      "human_assessment": "PARTIAL",
+      "human_notes": "The richest who-is-present-and-doing-what content (scene-30 man holding a gun to his mouth, scene-31 blood visible on the face) exists in the index, but the rankings (scene-8/19/17/25) reward token overlap with the credits close-ups. The information is present in the vision fields; the ranking itself is keyword-driven and misses it."
+    },
+    {
+      "query": "When does the most important visual event occur?",
+      "top_scene_ids": [
+        "scene-15",
+        "scene-5",
+        "scene-3"
+      ],
+      "timestamps": [
+        {
+          "start_sec": 41.791792,
+          "end_sec": 45.378712
+        },
+        {
+          "start_sec": 19.436103,
+          "end_sec": 21.521522
+        },
+        {
+          "start_sec": 16.975309,
+          "end_sec": 18.309977
+        }
+      ],
+      "scores": [
+        0.0779,
+        0.0663,
+        0.0484
+      ],
+      "model_reason": [
+        "semantic=0.16",
+        "semantic=0.13",
+        "semantic=0.10"
+      ],
+      "human_assessment": "WRONG",
+      "human_notes": "The most important visual event in the window is the gun-to-mouth reveal (~95.6-104s, scenes 30-31); retrieval returned scene-15 (41.79s), scene-5 (19.44s), scene-3 (16.98s logo). Also underlines the temporal weakness: a 'when' query gets no time-anchored answer with this lexicon-based retrieval."
+    }
+  ]
+}

@@ -1,11 +1,16 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: Movie Intelligence validation milestone — provider dispatch
-fixed and proven on a real T4; vision schema extended (objects / visual events /
-emotional cues / cinematography / confidence); vision-aware retrieval; director
-artifacts (`scene_index_v2.json`, `movie_memory/`, movie-understanding report);
-retrieval-eval + temporal-probe tooling. 178 tests pass locally; the real-movie
-scene analysis run on Colab is ready and **pending execution**.
+**Last Updated**: Movie Intelligence validation milestone **executed on a real
+movie**. `notebooks/colab_vision_gpu.ipynb` ran end-to-end on a Colab T4 with
+`Qwen/Qwen2.5-VL-3B-Instruct` (bf16): project `5398e39c-d35b-481a-b580-42d7224732eb`,
+120.078s window (opening credits → opening monologue), 33 scenes, **33/33 scenes
+vision-enriched** (`provenance=qwen3vl`), ~3.6s/scene, no OOM. Human verdicts on the
+milestone retrieval queries: **1 GOOD / 2 PARTIAL / 5 WRONG** (TF-IDF word-overlap
+retrieval has no semantic reasoning); temporal probe runs OOM-free but still anchors
+most events at `time_sec: 0.0` (honest limitation). Full artifacts preserved
+under `data/5398e39c-d35b-481a-b580-42d7224732eb/` (gitignored by design — scene
+cards carry the movie's dialogue; the human-verdict record is tracked under
+`reports/`). 183 tests pass locally.
 
 ## Executive Summary
 
@@ -25,7 +30,7 @@ The Autonomous Movie Studio project now has a **complete, modular architecture**
 - **Cinematic audio mix**: film-ducking, music-ducking, EBU R128 normalization, true-peak limiter, burned subtitles
 - **Real Qwen script writer** (`script/qwen_writer.py`) integrated into the orchestrator
 - **Provider manifest** (`provider_manifest.json`) recording exactly which providers/models executed
-- **112+ passing tests** (fast suite ~50s) with zero regressions; real-model tests explicitly gated
+- **183+ passing tests** (fast suite ~3-4 min) with zero regressions; real-model tests explicitly gated
 
 ## Current Architecture
 
@@ -355,12 +360,25 @@ providers:
 5. **Real TTS requires GPU** - providers skip CPU synthesis by design (`cpu_skipped`); a CUDA box is required for the benchmark/pipeline runs
 6. **No human feedback loop** - one-shot generation only
 7. **No cost tracking** - no visibility into token usage
-8. **T4 offload (7B-VL)** - `device_map="auto"` on a 16GB T4 offloads part of a
-   7B VL model to CPU: slower per-scene generation and peak VRAM below full
-   model. Documented, not hidden. `VISION_DTYPE=4bit` keeps it on-GPU.
-9. **Temporal localization is approximate** - `probe_temporal` orders events
-   with approx timestamps from evenly-spaced keyframes; it is not full-video
-   event detection and reports honestly when it cannot place an event in time.
+8. **T4 VRAM budget (QLM/Qwen3-VL)** - `device_map="auto"` on a 16GB T4 offloads
+   part of a 7B VL model to CPU (slower per-scene generation). The validated real
+   run used **3B bf16** (`Qwen/Qwen2.5-VL-3B-Instruct`, ~6s/scene, no OOM);
+   `VISION_DTYPE=4bit` / `VISION_ATTN=eager` / `VISION_MAX_IMAGE_PX=560` are the
+   band-aids that made it fit and avoid the Qwen2.5-VL device-side-assert.
+9. **Temporal localization is still weak (real-run verified)** - `probe_temporal`
+   runs OOM-free per-frame (single-image sampling), but events are mostly anchored
+   at `time_sec: 0.0` (only scene-32 got a real anchor at 116.43s). Treat any
+   timestamp as "within this scene, unplaced".
+10. **OCR / transcript misreads + hallucinated on-screen text (real-run)** - the
+    model read "Tyler Durden" as "Talier Durden" in several scenes, "Fight Club"
+    as "THE JUST BROTHERS"/"CLUB", a title card as "Davty Flatcher", and
+    hallucinated a "gun-in-mouth" confusion in places. **Confidence ≠
+    correctness** (scene-29 scored 0.88 while including a hallucinated title).
+11. **Retrieval is TF-IDF word-overlap only (real-run measured)** - the 8-query
+    milestone eval scored **1 GOOD / 2 PARTIAL / 5 WRONG**: it is good when the
+    query vocabulary literally appears in the vision fields (emphasized object),
+    and fails every narrative/thematic query (fate, contradiction, choice-vs-
+    control). No semantic/embedding layer yet.
 
 ## Test Commands
 
@@ -421,14 +439,18 @@ python src/main.py run --project-id <id>
 - ✅ Fixed: editorial renderer now applies `fps=` to every clip so `xfade`
   inputs share a timebase (mixed frame-rate sources no longer fail with
   "First input link timebase ... do not match ... xfade timebase")
-- ✅ Local E2E: 178 tests pass (vision, artifacts, retrieval, editorial
+- ✅ **Real Qwen3-VL movie-understanding run EXECUTED (Colab T4)**: project
+  `5398e39c-d35b-481a-b580-42d7224732eb` — `Qwen/Qwen2.5-VL-3B-Instruct` bf16,
+  120.078s window, 33/33 scenes enriched (`provenance=qwen3vl`), ~3.6s/scene,
+  no OOM, all artifacts produced (`scene_index_v2.json`, `semantic_index.json`,
+  `movie_understanding_report.md`, `retrieval_evaluation.json`/`.md`,
+  `temporal_probe.json`). Human verdicts: retrieval **1 GOOD / 2 PARTIAL /
+  5 WRONG** (TF-IDF has no semantics); temporal probe OOM-free but mostly
+  unanchored (0.0s). Full artifacts preserved under
+  `data/5398e39c-.../` + `reports/` (gitignored by design); the human-verdict
+  retrieval record is tracked at `data/5398e39c-.../reports/retrieval_evaluation.json`.
+- ✅ Local E2E: 183 tests pass (vision, artifacts, retrieval, editorial
   orchestrator, movie-understanding suites); editorial orchestrator test proves all artifacts
-- ⏳ GPU: `notebooks/colab_vision_gpu.ipynb` ready — cells 7/7b/7c produce
-  every required artifact (`scene_index_v2.json`, `semantic_index.json`,
-  `movie_memory/`, `reports/movie_understanding_report.md`,
-  `reports/retrieval_evaluation.json`/`.md`, `reports/temporal_probe.json`,
-  preserving `transcripts/transcript.json` + `scenes/scene_index.json`) and run
-  the retrieval eval + temporal probe on a real movie. Execution pending.
 
 ### 1. Timeline-Based Rendering Integration
 - ✅ Connect existing orchestrator to timeline system
@@ -641,10 +663,28 @@ grep -A 20 "profiles:" configs/profiles.yaml
     run retrieval eval, run temporal probe; cell 8 shows new fields
   - Documentation: `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`, `NEXT_MILESTONE.md`
 
+## Files Changed This Session (Real Movie Understanding Run — Finalized)
+
+- **Created** (real-run artifacts for project `5398e39c-d35b-481a-b580-42d7224732eb`):
+  - `data/5398e39c-.../movie_index.json`, `scene_index_v2.json`,
+    `semantic_index.json`, `events.json`, `characters.json`, `manifest.json`
+  - `data/5398e39c-.../reports/movie_understanding_report.md`,
+    `retrieval_evaluation.json`/`.md` (human assessments filled),
+    `temporal_probe.json`
+  - Note: `data/` is gitignored by design (scene cards echo the movie's
+    dialogue transcript). Full artifacts are preserved locally; only the
+    retrieval human-verdict record is tracked (force-added).
+
+- **Modified**:
+  - Documentation: `PROJECT_STATUS.md` (real-run summary, honest verdicts,
+    real-known-limitations, 183-test count), `DEVELOPMENT_ROADMAP.md`,
+    `NEXT_MILESTONE.md` (milestone completed with measurements; next bottleneck
+    is retrieval semantics + temporal localization)
+
 ## Test Results
 
 ```
-178 fast tests ............................ PASS (incl. editorial, movie_understanding, vision, artifacts, retrieval suites)
+183 fast tests ............................ PASS (incl. editorial, movie_understanding, vision, artifacts, retrieval suites)
 ```
   - 26 Qwen provider tests (incl. placeholder-guard + plain-text fallback)
   - 10 Creative director tests
@@ -666,13 +706,13 @@ grep -A 20 "profiles:" configs/profiles.yaml
 3 skipped (real-TTS GPU tests + real-TTS benchmark — gated behind STUDIO_RUN_REAL_TESTS=1 + CUDA)
 11 deselected (slow / llm_integration)
 ─────────────────────────────────────────
-TOTAL: 178 passing, 0 failures
+TOTAL: 183 passing, 0 failures
 
 ## Status for Handoff
 
 ✅ **Architecture**: Complete and validated
 ✅ **Local Development**: Ready on weak laptops
-✅ **Testing**: Comprehensive, fast (178 passing, ~3 min)
+✅ **Testing**: Comprehensive, fast (183 passing, ~3-4 min)
 ✅ **Multi-Scene Cut**: Selection, extraction, timeline, render, and QC wired end-to-end
 ✅ **Typed Evidence Selection**: Director-driven evidence typing used by selection
 ✅ **Real Script Provider**: Qwen narration writer integrated into the orchestrator
@@ -693,10 +733,12 @@ TOTAL: 178 passing, 0 failures
 ✅ **Colab GPU Validation (LLM)**: PASSED on a real T4 with Qwen/Qwen3-4B-Instruct-2507
    (real concepts + narration, no OOM, no placeholder echo)
 ✅ **Documentation**: Profiles, provider system, configuration, Colab flow, TTS, vision
-⏳ **Real Qwen3-VL movie-understanding run**: `colab_vision_gpu.ipynb` +
-   `colab_vision_setup.sh` ready and now produce all validation artifacts
-   (scene_index_v2, movie_memory/, understanding report, retrieval eval,
-   temporal probe); needs a user-supplied legally-owned movie to execute on a T4/A100
+✅ **Real Qwen3-VL movie-understanding run**: EXECUTED on a real T4 with
+   `Qwen/Qwen2.5-VL-3B-Instruct` (bf16) — 33/33 scenes vision-enriched, no OOM,
+   all artifacts in `data/5398e39c-d35b-481a-b580-42d7224732eb/`. Retrieval eval:
+   1 GOOD / 2 PARTIAL / 5 WRONG (TF-IDF limits). Temporal probe: runs, mostly
+   unanchored. Project earned its honest verdict — further improvement needs a
+   semantic (embedder/LLM) retrieval layer + stronger temporal localization.
 ⏳ **Real-Movie + Real-TTS GPU run**: notebook `colab_real_movie_tts.ipynb` ready;
    needs a user-supplied legally-owned movie to execute on a T4/A100
 ⏳ **Image/Video Generation**: Mocks complete, integration pending
