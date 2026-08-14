@@ -463,7 +463,34 @@ def test_temporal_probe_string_events():
     )
     out = en.probe_temporal(_scene_with_keyframes(_scenes()[1]), [], n_frames=2)
     assert out["ok"] is True
-    assert out["visual_events"][0] == {"time_sec": None, "event": "character enters"}
+    # String events carry no explicit time -> anchored to the sampled frame time.
+    # (The fake returns the same 2 events for both frames → 4 anchored events.)
+    assert out["visual_events"][0]["event"] == "character enters"
+    assert out["visual_events"][0]["time_sec"] == 3.75
+    assert out["visual_events"][1] == {"time_sec": 3.75, "event": "sits down"}
+    assert out["visual_events"][2]["time_sec"] == 5.25
+
+
+def test_temporal_probe_single_image_per_frame():
+    """Regression: the probe must prompt keyframes one at a time (single image
+    per forward pass) so peak VRAM equals scene enrichment - the multi-image
+    batch path OOM'd on a 16GB T4."""
+    en = _FakeVL(
+        answer='{"visual_events": [{"time_sec": 0.5, "event": "enter"}], '
+               '"confidence": 0.8}'
+    )
+    scene = _scene_with_keyframes(_scenes()[1])  # 3.0-6.0s, 2 keyframes
+    out = en.probe_temporal(scene, [], n_frames=2)
+    assert out["ok"] is True
+    # One _generate call per keyframe, each with exactly one image path.
+    assert len(en._calls) == 2
+    assert all(len(paths) == 1 for paths, _ in en._calls)
+    assert out["method"] == "per-frame single-image sampling"
+    assert out["sampled_times_sec"] == [3.75, 5.25]
+    # Duplicate event from the two frames is deduped after ordering.
+    assert out["visual_events"] == [
+        {"time_sec": 0.5, "event": "enter"},
+    ]
 
 
 def test_temporal_probe_needs_two_keyframes():

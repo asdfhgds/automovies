@@ -270,6 +270,11 @@ class Qwen3VLEnricher(SceneEnricher):
 
         _load_start = _time.monotonic()
         try:
+            # Reduces VRAM fragmentation on a T4 with a nearly-full card
+            # (e.g. device_map="auto" offloading part of a 7B VL model).
+            import os as _os
+            _os.environ.setdefault(
+                "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
             import torch
             from transformers import AutoProcessor
 
@@ -593,14 +598,14 @@ Answer now:"""
     # ------------------------------------------------------------------
 
     def _build_temporal_prompt(self, scene: dict, transcript_text: str,
-                               n_frames: int) -> str:
+                               approx_sec: float, frame_count: int) -> str:
         scene_id = scene.get("scene_id", "scene")
-        return f"""You are analyzing {n_frames} frames spread across a film scene.
+        return f"""You are analyzing 1 of {frame_count} frames sampled across a film scene.
 
-## Frames
-{n_frames} keyframes taken evenly through the scene window
-({float(scene.get('start_sec', 0.0)):g}s - {float(scene.get('end_sec', 0.0)):g}s),
-in chronological order.
+## Frame
+I have attached a single keyframe captured at approximately {approx_sec:g}s
+into the scene window
+({float(scene.get('start_sec', 0.0)):g}s - {float(scene.get('end_sec', 0.0)):g}s).
 
 ## Scene transcript (dialogue / narration audible during the scene)
 {transcript_text[:400] or "(no dialogue in this scene)"}
@@ -609,23 +614,24 @@ in chronological order.
 {scene_id}
 
 ## Task
-Order the key *visual events* that happen in this scene (character enters,
+Describe the key *visual events* visible IN THIS ONE FRAME (character enters,
 sits, object appears, close-up, dialogue, reaction, character leaves, etc.).
-Give each event an APPROXIMATE time (in seconds from the scene start). Be
-honest: if you cannot localize an event to a time, say "~?" rather than
-guessing. Return ONLY valid JSON:
+Give each event an APPROXIMATE time (in seconds from the scene start) - the
+frame was captured at ~{approx_sec:g}s, so events in it happened near that
+time. Be honest: if you cannot tell, say "~?" rather than guessing. Return
+ONLY valid JSON:
 
 {{
   "visual_events": [
     {{"time_sec": 0.0, "event": "SHORT DESCRIPTION OF WHAT IS VISIBLE"}}
   ],
   "confidence": 0.0-1.0,
-  "limitation": "honest note about what this temporal read cannot capture"
+  "limitation": "honest note about what this single-frame read cannot capture"
 }}
 
 IMPORTANT - REPLACE, DON'T COPY:
 - The ALL-CAPS strings above are placeholders, NOT text to output.
-- Write original observations about THESE frames only.
+- Write original observations about THIS frame only.
 
 Answer now:"""
 
@@ -633,11 +639,12 @@ Answer now:"""
                        n_frames: int = 4) -> dict:
         """Return an ordered, approx-timestamped visual event list for a scene.
 
-        Evaluation-only helper for the temporal-understanding milestone. Uses
-        ``n_frames`` keyframes spread across the scene (the caller must have
-        attached them via ``key_frames``). Honest failure mode: if vision is
-        unavailable it returns a record with ``ok=false`` rather than inventing
-        timestamps.
+        Evaluation-only helper for the temporal-understanding milestone. Each
+        keyframe is prompted ONE AT A TIME (single image per forward pass, so
+        peak VRAM stays equal to scene enrichment - multi-image batches OOM on
+        a 16GB T4 when the model already occupies most of the card). Events are
+        then stitched and ordered by time. Honest failure mode: returns
+        ``ok=false`` with a reason rather than inventing timestamps.
         """
         scene_id = scene.get("scene_id", "scene-0")
         ok, reason = self._vision_available()
@@ -660,41 +667,69 @@ Answer now:"""
             if d.get("text")
         ) or (scene.get("transcript") or "")
 
-        prompt = self._build_temporal_prompt(
-            scene, transcript_text, len(keyframes[:n_frames]))
-        try:
-            output = self._generate(keyframes[:n_frames], prompt)
-        except Exception as e:
-            return {"scene_id": scene_id, "ok": False,
-                    "reason": f"generation failed: {e}"}
+        start = float(scene.get("start_sec", 0.0))
+        end = float(scene.get("end_sec", start))
+        duration = max(0.0, end - start)
+        frames = keyframes[: max(2, int(n_frames))]
+        # Approximate capture time per keyframe - mirrors keyframes.py spacing.
+        n = len(frames)
+        if n == 1:
+            times = [start + duration * 0.35]
+        else:
+            times = [start + duration * ((i + 0.5) / n) for i in range(n)]
 
-        parsed = _extract_json_dict(output)
-        if not parsed:
-            return {"scene_id": scene_id, "ok": False,
-                    "reason": f"non-JSON output: {output[:200]}"}
+        events: List[dict] = []
+        confidences: List[float] = []
+        limitations: List[str] = []
+        for frame, approx_sec in zip(frames, times):
+            prompt = self._build_temporal_prompt(
+                scene, transcript_text, approx_sec=approx_sec, frame_count=n)
+            try:
+                output = self._generate([frame], prompt)
+            except Exception as e:
+                return {"scene_id": scene_id, "ok": False,
+                        "reason": f"generation failed: {e}"}
 
-        events = parsed.get("visual_events") or []
-        if isinstance(events, list):
-            cleaned = []
-            for ev in events:
+            parsed = _extract_json_dict(output)
+            if not parsed:
+                return {"scene_id": scene_id, "ok": False,
+                        "reason": f"non-JSON output: {output[:200]}"}
+
+            for ev in parsed.get("visual_events") or []:
                 if isinstance(ev, dict):
-                    cleaned.append({
-                        "time_sec": _clean_sec(ev.get("time_sec")),
+                    t = _clean_sec(ev.get("time_sec"))
+                    events.append({
+                        "time_sec": approx_sec if t is None else t,
                         "event": _clean_str(ev.get("event")),
                     })
                 elif isinstance(ev, str):
-                    cleaned.append({"time_sec": None, "event": _clean_str(ev)})
-            cleaned = [e for e in cleaned if e["event"]]
-        else:
-            cleaned = []
+                    # No time given: anchor to the sampled frame time.
+                    events.append({"time_sec": approx_sec, "event": _clean_str(ev)})
+            conf = parsed.get("confidence")
+            if isinstance(conf, (int, float)) and not isinstance(conf, bool):
+                confidences.append(_clean_confidence(conf))
+            lim = _clean_str(parsed.get("limitation"))
+            if lim:
+                limitations.append(lim)
+
+        events = [e for e in events if e["event"]]
+        events.sort(key=lambda e: (e["time_sec"] if e["time_sec"] is not None
+                                   else float("inf"), e["event"]))
+        deduped: List[dict] = []
+        for e in events:
+            if deduped and e["event"].lower() == deduped[-1]["event"].lower():
+                continue
+            deduped.append(e)
 
         return {
             "scene_id": scene_id,
             "ok": True,
-            "visual_events": cleaned,
-            "confidence": _clean_confidence(parsed.get("confidence")),
-            "limitation": _clean_str(parsed.get("limitation")),
-            "raw": output[:500],
+            "visual_events": deduped,
+            "confidence": (round(sum(confidences) / len(confidences), 2)
+                           if confidences else None),
+            "limitation": " | ".join(limitations) or None,
+            "method": "per-frame single-image sampling",
+            "sampled_times_sec": [round(t, 2) for t in times],
         }
 
 
