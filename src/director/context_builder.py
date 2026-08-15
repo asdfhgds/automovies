@@ -1,0 +1,193 @@
+"""Director context builder: compact, fact-grounded context for the LLM.
+
+The Movie Intelligence scene index can be thousands of lines of JSON. Dumping it
+raw into the prompt drowns the model in irrelevant detail and invites
+hallucination. This builder instead renders a drastically compressed, per-scene
+summary plus a "only these facts exist" vocabulary, capped at a token budget.
+
+Two kinds of output are produced:
+
+- ``build_concept_generation_context`` — everything the director needs to
+  brainstorm 5 varied concepts AND to be told what it may (and must not) invent.
+- ``build_plan_context`` — a tighter slice for producing the final plan for the
+  selected concept.
+
+Both are deterministic. No LLM calls happen here.
+"""
+from typing import Dict, Any, List, Optional, Tuple
+
+from director.scene_facts import SceneFacts
+
+
+def _fmt_ts(value) -> str:
+    if value is None:
+        return "?–?"
+    try:
+        return f"{float(value):.1f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def scene_summary(sf, index: int = 0) -> str:
+    """One compact, labeled summary line for a single scene.
+
+    Mirrors the milestone example::
+
+        SCENE 18
+        Time: 48.3-51.4
+        Characters: Barman
+        Actions: speaking, holding revolver
+        Objects: revolver
+        Visual: close-up, low-key lighting
+        Mood: tense
+        Themes: violence, confrontation
+        Dialogue: ...
+    """
+    shown = sf.scene_id
+    chars = ", ".join(sf.characters) or "unknown_character_01 (low confidence)"
+    actions = ", ".join(sf.actions) or "—"
+    objects = ", ".join(sf.objects) or "—"
+    dialogue = sf.dialogue_text.strip()
+    lines = [
+        f"SCENE {shown}",
+        f"Time: {_fmt_ts(sf.start_sec)}–{_fmt_ts(sf.end_sec)}",
+        f"Characters: {chars}",
+        f"Actions: {actions}",
+        f"Objects: {objects}",
+    ]
+    if sf.visual_description:
+        lines.append(f"Visual: {sf.visual_description}")
+    if sf.cinematography:
+        lines.append(f"Cinematography: {sf.cinematography}")
+    if sf.mood:
+        lines.append(f"Mood: {sf.mood}")
+    if sf.themes:
+        lines.append(f"Themes: {', '.join(sf.themes)}")
+    if sf.visual_events:
+        lines.append(f"Visual events: {', '.join(sf.visual_events[:4])}")
+    if dialogue:
+        lines.append(f"Dialogue: {dialogue[:220]}")
+    return "\n".join(lines)
+
+
+class DirectorContextBuilder:
+    """Builds token-limited director context from ``SceneFacts``."""
+
+    def __init__(self, max_tokens: int = 4096, reserve_for_output: int = 2048):
+        self.max_tokens = max_tokens
+        self.reserve_for_output = reserve_for_output
+        self.available = max_tokens - reserve_for_output
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Rough token estimate (1 token ~ 4 chars)."""
+        return len(text or "") // 4
+
+    def _fit(self, parts: List[str], budget: int, meta: Dict[str, Any],
+             meta_key: str, truncated_key: str = None) -> List[str]:
+        """Append as many parts as fit within ``budget`` of remaining tokens."""
+        used = 0
+        included = 0
+        kept = []
+        for p in parts:
+            t = self._estimate_tokens(p)
+            if used + t > budget:
+                meta[truncated_key or "truncated"] = True
+                break
+            kept.append(p)
+            used += t
+            included += 1
+        meta[meta_key] = included
+        return kept
+
+    def build_concept_generation_context(
+        self,
+        movie_metadata: Dict[str, Any],
+        scene_facts: SceneFacts,
+        creative_memory: str = "",
+        user_topic: Optional[str] = None,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Build the full context for the concept brainstorm."""
+        meta = {
+            "scenes_included": 0,
+            "total_scenes": len(scene_facts),
+            "memory_included": False,
+            "truncated": False,
+        }
+
+        parts: List[str] = []
+
+        # 1. Movie metadata + hard grounding rules (always included, tiny).
+        title = movie_metadata.get("title", "Unknown")
+        duration = movie_metadata.get("duration_sec", 0)
+        try:
+            dur_str = f"{float(duration):.1f}s"
+        except (TypeError, ValueError):
+            dur_str = str(duration)
+        grounding = (
+            "## GROUNDING RULES (MANDATORY)\n"
+            "You may ONLY reference the characters, locations, objects, themes, "
+            "and dialogue listed below. These are everything known to exist.\n"
+            "- If a fact is missing or uncertain, say so explicitly. NEVER invent "
+            "a character name, line of dialogue, object, or scene that is not listed.\n"
+            "- Refer to scenes by their SCENE id exactly as shown.\n"
+            "- Every concept's required_evidence must cite specific SCENE ids "
+            "that actually appear below."
+        )
+        parts.append(
+            f"## MOVIE\nTitle: {title}\nDuration: {dur_str}\n\n{grounding}"
+        )
+
+        budget = int(self.available * 0.55)
+        scene_parts = [scene_summary(sf, i) for i, sf in enumerate(scene_facts)]
+        chosen = self._fit(scene_parts, budget, meta, "scenes_included",
+                           "truncated")
+        if chosen:
+            parts.append("## ACTUAL SCENES\n" + "\n\n".join(chosen))
+
+        # 3. Fact vocabulary (known names — hallucination guard).
+        vocab_lines = [
+            f"- Known characters: {', '.join(scene_facts.known_characters()) or '(none identified)'}",
+            f"- Known locations: {', '.join(scene_facts.known_locations()) or '(none identified)'}",
+            f"- Known objects: {', '.join(scene_facts.known_objects()) or '(none identified)'}",
+        ]
+        vocab = "## WHAT ACTUALLY EXISTS\n" + "\n".join(vocab_lines)
+        if self._estimate_tokens(vocab) <= int(self.available * 0.7):
+            parts.append(vocab)
+
+        # 4. Creative memory (avoid repetition) if it fits.
+        if creative_memory and creative_memory.strip():
+            mem_tokens = self._estimate_tokens(creative_memory)
+            if self._estimate_tokens("\n\n".join(parts)) + mem_tokens <= self.available:
+                parts.append(f"## PREVIOUS CONCEPTS (DO NOT REPEAT)\n{creative_memory}")
+                meta["memory_included"] = True
+
+        if user_topic:
+            parts.append(f"## USER FOCUS\n{user_topic}")
+
+        context = "\n\n".join(parts)
+        meta["estimated_tokens"] = self._estimate_tokens(context)
+        return context, meta
+
+    def build_plan_context(
+        self,
+        concept: Dict[str, Any],
+        scene_facts: SceneFacts,
+        selected_scene_ids: List[str],
+    ) -> str:
+        """Context for producing the final plan, scoped to the chosen scenes."""
+        selected = [
+            sf for sf in scene_facts
+            if sf.scene_id in set(selected_scene_ids)
+        ]
+        if not selected:
+            selected = list(scene_facts.scenes)
+        scene_blob = "\n\n".join(scene_summary(sf, i) for i, sf in enumerate(selected))
+        return (
+            f"## SELECTED CONCEPT\n"
+            f"Title: {concept.get('title', '')}\n"
+            f"Hook: {concept.get('hook', '')}\n"
+            f"Thesis: {concept.get('thesis', '')}\n"
+            "\n"
+            f"## EVIDENCE SCENES (the Only proven scenes)\n{scene_blob}"
+        )

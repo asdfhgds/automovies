@@ -1,6 +1,24 @@
 # NEXT MILESTONE
 
-**Last Updated**: Movie Intelligence validation milestone **completed on a real
+**Last Updated**: Movie-grounded Creative Director milestone **built and
+unit-tested; real-Qwen clip validation gated/pending**.
+
+What this milestone does (see `PROJECT_STATUS.md` for details): the Director now
+reads the existing Movie Intelligence (`movie_index.json` → `SceneFacts`), builds
+a compact, token-limited, fact-grounded context, asks real Qwen for **5 genuinely
+different concepts** (each with `required_evidence`), **rejects** any concept
+whose evidence is not actually present in the scenes (plus generic-thesis
+rejection, with regeneration), scores the survivors with `ConceptCritic` +
+evidence coverage, selects the strongest, and emits a scene-aware plan and an
+inspectable `reports/director_reasoning.md`.
+
+**Explicitly NOT implemented** (per milestone): evidence verifier, new embedding/
+retrieval model, TTS replacement, subtitle redesign, generative video/image,
+YouTube automation, and **script wiring** — the pipeline stops at the selected
+concept + director plan so the Director can be validated on its own.
+**221 fast tests pass** (21 new grounded-director tests).
+
+Prior milestone (kept): Movie Intelligence validation **completed on a real
 movie**. `notebooks/colab_vision_gpu.ipynb` ran end-to-end on a Colab T4 with
 `Qwen/Qwen2.5-VL-3B-Instruct` (bf16): project `5398e39c-d35b-481a-b580-42d7224732eb`,
 120.078s window (Portuguese-dubbed clip; English is the norm), 33 scenes, 33/33 enriched (`provenance=qwen3vl`), ~3.6s/scene,
@@ -59,8 +77,18 @@ retrieval human-verdict record is tracked in `reports/`.
     at #2, emphasized-object stays #1 — but the English-only embedder only
     partially bridges the Portuguese-dubbed clip's narrative queries (use
     `paraphrase-multilingual-MiniLM-L12-v2` for non-English).
-- Local E2E: **191 fast tests pass** (vision, artifacts, retrieval, editorial,
-    movie-understanding, semantic-embedding suites).
+  - **Movie-grounded Creative Director (new)**: `SceneFacts` normalizes the
+    existing Movie Intelligence; `DirectorContextBuilder` makes a compact,
+    token-limited, fact-grounded context; `EvidenceAnalyzer` grounds
+    `required_evidence` to real scenes (coverage HIGH/MED/LOW, no new retrieval
+    layer); `MovieGroundedDirector` generates 5 diverse concepts → rejects
+    generic / un-evidenced ideas (with regeneration) → `ConceptCritic` +
+    coverage → select → scene-aware plan → `CreativeMemory` →
+    `reports/director_reasoning.md`. Hallucination-safe (unknown characters
+    marked `unknown_character_01 (low confidence)`; vocab limited to facts that
+    exist). Stops at the plan — NOT wired to the script stage.
+- Local E2E: **221 fast tests pass** (vision, artifacts, retrieval, editorial,
+    movie-understanding, semantic-embedding, grounded-director suites).
   - **Real-movie run executed (Colab T4)**: project `5398e39c-d35b-481a-b580-
     42d7224732eb` — `Qwen/Qwen2.5-VL-3B-Instruct` (bf16), 120.078s window
     (Portuguese-dubbed clip; English is the normal case),
@@ -85,6 +113,12 @@ retrieval human-verdict record is tracked in `reports/`.
     retrieval yet.
   - Editorial narration is deterministic around the real (Qwen) thesis — not yet an LLM editorial writer.
   - Real TTS (Kokoro priority) — quality/performance needs a real-GPU eval.
+  - **Movie-grounded Creative Director — real-Qwen clip validation pending**: the
+    director + evidence pipeline + reasoning report are built and unit-tested
+    (mock LLM), but the real-Qwen run on the validated movie
+    (`bc6384be-...`, via `scripts/run_director_validation.py` → Cell 7d) is
+    gated and has NOT yet been executed/measured on a GPU. Until then, whether
+    real concepts are specific, non-generic, and grounded is unproven.
 
 - **FAILED (baseline to beat)**
   - The first real-movie output (pre-editorial) was: clips in sequence + robotic TTS + paragraph subtitles.
@@ -113,34 +147,35 @@ retrieval human-verdict record is tracked in `reports/`.
     confidence (0.88 on scene-29) does **not** imply correctness.
   - Captions are chunked short (≤3 words) but timed by even distribution unless real word timestamps exist.
   - TTS emotion/pace control is approximate per provider (Kokoro voice+speed; not true expressive control).
+  - The Director's evidence matching is **lexical only** (phrase/token overlap
+    against the scene facts — deliberately no new retrieval system). On the
+    validated western clip (`bc6384be`) no characters were identified and the
+    dialogue is garbled, so concepts must lean on location/objects/mood/themes;
+    a concept whose claims don't literally appear is rejected (this is a feature,
+    but it means semantically-paraphrased-but-true evidence can be under-counted).
 
-- **CURRENT BOTTLENECK**: retrieval *semantics* (sharpened by measurement). The
-  real run proved keyframes → Qwen3-VL → rich, honest story cards at ~3.6s/scene
-  on a T4. TF-IDF scored 1/8 GOOD; a MiniLM dense-embedding pass re-ranked
-  genuinely (tension→scene-30 #2, object #1, scores 0.02→0.20) but narrative and
-  thematic queries still miss, and the English-only embedder is weak on the
-  Portuguese-dubbed clip. Next lever: stronger retrieval (LLM-natural-language
-  or multilingual embeddings) validated on an **English** movie, then wiring the
-  scene knowledge into an evidence-driven editorial plan. Secondary bottleneck:
-  temporal event localization (scene-scoped, not time-scoped).
+- **CURRENT BOTTLENECK**: **validating the Movie-grounded Creative Director on the
+  real movie with real Qwen.** The infrastructure is built and unit-tested
+  (221 fast tests). The unproven link is that real Qwen produces 5 genuinely
+  different, grounded, non-generic concepts on the real `bc6384be` intelligence,
+  and that the evidence gate rejects only the right things. Secondary bottleneck
+  (prior milestone, kept): retrieval *semantics* — TF-IDF scored 1/8 GOOD and
+  MiniLM helped but narrative/thematic queries still miss on non-English clips.
 
-- **NEXT ACTION** (after the completed validation run)
-  1. **Advance the semantic retrieval layer**: the dense-embedding path
-     (`--method embedding`, sentence-transformers) is built and measured
-     (MiniLM: scores 0.02→0.20, tension→scene-30 #2, object #1). Next: try an
-     LLM-natural-language retriever and/or a multilingual embedder
-     (`paraphrase-multilingual-MiniLM-L12-v2`) and re-run
-     `scripts/evaluate_retrieval.py` — target flipping the measured 1/8 GOOD
-     upward and turning PARTIALs into GOODs without losing Q4; re-fill
-     `human_assessment` on an **English** movie.
-  2. **Strengthen temporal localization**: extend `probe_temporal()` to emit a
-     short "when does X happen" answer per event cluster rather than scene-scoped
-     0.0 anchors; consider denser keyframes on the loudest segment only.
-  3. **Add OCR/transcript guardrails**: spell-check pass over vision-extracted
-     text/names against the transcript+title list ("Tyler Durden" ≠ "Talier
-     Durden"); suppress clearly-hallucinated title cards.
-  4. Feed the *validated* scene knowledge into the Creative Director / editorial
-     plan: select scenes by the semantic + object evidence now proven to be real.
-  5. Then the next GPU proof: real-movie + real-TTS editorial render
-     (`colab_real_movie_tts.ipynb`), then evaluate several real videos and pick
-     the next milestone from the largest visible weakness.
+- **NEXT ACTION** (validate the grounded director, then wire it to the script)
+  1. **Execute the real-Qwen grounded-director run** on the validated movie:
+     `python scripts/run_director_validation.py --project data/bc6384be-...` on
+     a Colab T4 (or Notebook Cell 7d). Inspect `reports/director_reasoning.md`:
+     are the 5 concepts specific, non-generic, grounded in actual scenes, and
+     meaningfully different (diversity metric)? Which concepts were rejected and
+     why? Fill/record the per-milestone fields (§16): context size, model,
+     concepts generated, selected concept, evidence coverage, failures, known
+     hallucination cases, next bottleneck.
+  2. **Iterate on grounding quality** if the real run under-delivers: relax/refine
+     `required_evidence` matching (stemming / synonym-aware lexical matching, not a
+     new retrieval system), or improve the compact context so Qwen cites real scenes.
+  3. **Do NOT wire the script stage yet** (§11). Once the director is validated
+     as genuinely specific + grounded, the *next* milestone connects the selected
+     concept + evidence strategy to narrative/editorial generation.
+  4. (Background, prior milestone) stronger retrieval semantics + temporal
+     localization remain open research items.

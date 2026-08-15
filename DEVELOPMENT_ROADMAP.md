@@ -71,6 +71,33 @@
   weakness); temporal probe OOM-free but mostly unanchored. Full artifacts
   preserved under `data/5398e39c-.../` + `reports/` (gitignored by design).
 
+### Movie-grounded Creative Director — Built + Tested, Real-Qwen Run Pending
+- ✅ **`src/director/scene_facts.py`** — normalizes the existing Movie
+  Intelligence (`movie_index.json` / `scene_index_v2.json` / `movie_memory/`)
+  into uniform `SceneFact` records; hallucination-guard vocabulary.
+- ✅ **`src/director/context_builder.py`** — compact, token-limited director
+  context (per-scene summaries + known character/object/location vocab +
+  memory); never dumps raw scene JSON.
+- ✅ **`src/director/evidence.py`** — `EvidenceAnalyzer` grounds
+  `required_evidence` to real scenes (coverage HIGH/MED/LOW, scene mapping,
+  evidence strategy, visual motifs); no new retrieval layer.
+- ✅ **`src/director/concepts.py`** — prompt builders (generation / rejection /
+  plan) + tolerant JSON parsing + diversity metric + generic-thesis detection.
+- ✅ **`src/director/report.py`** — `reports/director_reasoning.md` renderer.
+- ✅ **`src/director/grounded.py`** — `MovieGroundedDirector`: 5 diverse concepts
+  → evidence gate (reject generic / un-evidenced, regenerate) → `ConceptCritic`
+  + coverage → select → scene-aware plan → `CreativeMemory` → report.
+- ✅ **Hallucination-safe**: unknown characters marked
+  `unknown_character_01 (low confidence)`; concepts must carry `required_evidence`
+  that matches real scenes; the Director can **reject its own idea**.
+- ✅ **`scripts/run_director_validation.py`** — gated real-Qwen Colab validation.
+- ✅ **`notebooks/colab_vision_gpu.ipynb` Cell 7d** — grounded director; Cell 7b
+  default flipped to `embedding`.
+- ✅ **221 tests pass** (21 new grounded-director tests); real-Qwen test gated
+  (`llm_integration`).
+- ⏳ **Real-Qwen clip run pending** (validated movie `bc6384be-...`). Stops at the
+  plan — NOT wired to the script stage (§11).
+
 ### Foundation: Movie Understanding (Real & Tested)
 - ✅ **Transcription**: Whisper/WhisperX with word-level timestamps
 - ✅ **Scene Detection**: PySceneDetect for shot/scene boundaries
@@ -374,6 +401,13 @@ Improve quality and reduce costs through iteration.
    tension→scene-30 #2, object #1, but narrative queries still miss on the PT
    clip. Next: LLM/multilingual retrieval validated on an English movie, then
    feed the validated scene knowledge into the Creative Director
+5c. ✅ **Movie-grounded Creative Director built + tested** — SceneFacts + context
+   builder + evidence gate (reject generic/un-evidenced) + ConceptCritic +
+   scene-aware plan + `director_reasoning.md`; 221 fast tests pass.
+   ⏳ **Real-Qwen clip validation pending** (validated movie `bc6384be-...`,
+   `scripts/run_director_validation.py` / Notebook Cell 7d) — then wire the
+   selected concept + evidence strategy to narrative/editorial generation in the
+   *next* milestone (§11).
 6. ⏳ Evaluate several real videos; pick next milestone from the largest visible weakness
 
 ### Medium Priority (Do After)

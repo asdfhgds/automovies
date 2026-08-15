@@ -1,7 +1,17 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: Movie Intelligence validation milestone **executed on a real
-movie** + **dense-embedding retrieval layer added and measured**. The real run
+**Last Updated**: Movie-grounded Creative Director milestone **built and unit-tested**
+(real-Qwen clip validation pending execution). The Director now reads the existing
+Movie Intelligence (`movie_index.json` → `SceneFacts`), builds a compact
+fact-grounded context, asks real Qwen for 5 diverse concepts, **rejects** any
+concept whose `required_evidence` is not actually present in the scenes, selects
+the strongest grounded concept, and emits a scene-aware director plan
+(`reports/director_reasoning.md`). Evidence verifier, new retrieval system, and
+script wiring are intentionally **not** implemented. 221 fast tests pass (21 new
+grounded-director tests).
+
+Prior milestone (kept): Movie Intelligence validation **executed on a real movie**
++ **dense-embedding retrieval layer added and measured**. The real run
 (`notebooks/colab_vision_gpu.ipynb`, Colab T4, `Qwen/Qwen2.5-VL-3B-Instruct`
 bf16) covered project `5398e39c-d35b-481a-b580-42d7224732eb`, 120.078s window
 (opening credits → opening monologue — **Portuguese-dubbed clip this time**;
@@ -565,6 +575,77 @@ python src/main.py run --project-id <id>
 grep -A 20 "profiles:" configs/profiles.yaml
 ```
 
+## Movie-Grounded Creative Director Milestone (NEW)
+
+**Objective**: make the Creative Director actually consume the richer Movie
+Intelligence representation that already exists, and reason only from what is
+actually present in the movie.
+
+### How Movie Intelligence feeds the Director
+1. `SceneFacts.from_movie_intelligence(movie_index)` / `from_project_dir()`
+   normalizes any of the existing on-disk representations
+   (`movie_index.json` with `scenes[].story`, a bare scene list, or the
+   `movie_memory/` / `scene_index_v2.json` bundle) into a uniform list of
+   `SceneFact` records carrying only vision/transcript facts.
+2. `DirectorContextBuilder.build_concept_generation_context()` renders a
+   compact, **token-limited** per-scene summary (SCENE id / Time / Characters /
+   Actions / Objects / Visual / Mood / Themes / Dialogue) plus a
+   "what actually exists" vocabulary (known characters / locations / objects),
+   and the creative-memory summary. It deliberately does **not** dump the raw
+   scene JSON into the prompt.
+3. `EvidenceAnalyzer` lexically grounds each concept's `required_evidence`
+   claims to real scenes (no new retrieval system — it inspects the existing
+   index) and returns coverage HIGH / MED / LOW.
+4. `MovieGroundedDirector` orchestrates: generate 5 diverse concepts → evidence
+   gate (reject generic or un-evidenced concepts, regenerate substitutes) →
+   `ConceptCritic` feasibility scoring → select strongest → scene-aware plan →
+   `CreativeMemory` store → `reports/director_reasoning.md`.
+
+### Design decisions (per milestone)
+- **Concepts carry `required_evidence`** (concrete claims checked against real
+  scenes) instead of only `supporting_scene_types`; the critic now scores an
+  actually-grounded evidence coverage.
+- **The Director may reject its own idea**: a concept whose `required_evidence`
+  does not match at least `min_coverage` of scenes, or whose thesis is a generic
+  platitude, is rejected and replaced (up to 2 regeneration rounds); rejected
+  concepts are shown in the report.
+- **Hallucination prevention**: unknown characters are rendered as
+  `unknown_character_01 (low confidence)`; the context lists only names/objects/
+  locations that exist, and `SceneFacts.is_grounded()` lets callers verify a
+  claim is real.
+- **No script wiring yet**: the pipeline stops after the selected concept +
+  plan (§11). Evidence verifier, new embedding model, TTS replacement, subtitle
+  redesign, generative video/image, and YouTube automation are intentionally NOT
+  implemented (§15).
+
+### Files added
+- `src/director/scene_facts.py` — normalizer + fact access + hallucination guard.
+- `src/director/context_builder.py` — compact, token-limited director context.
+- `src/director/evidence.py` — EvidenceAnalyzer (coverage, scene mapping,
+  evidence strategy, visual motifs).
+- `src/director/concepts.py` — prompt builders + tolerant JSON parsing for the
+  concept / plan / rejection / diversity schemas.
+- `src/director/report.py` — renders `reports/director_reasoning.md`.
+- `src/director/grounded.py` — `MovieGroundedDirector` orchestration.
+- `scripts/run_director_validation.py` — gated real-Qwen Colab validation
+  (5 concepts → select → plan → `director_reasoning.md`).
+- `tests/test_grounded_director.py` (21 tests: context builder, truncation,
+  hallucination guard, evidence availability, diversity, rejection, memory,
+  plan schema).
+- `tests/test_grounded_director_real_qwen.py` — gated (`llm_integration`).
+- `notebooks/colab_vision_gpu.ipynb` — added Cell 7d (grounded director); retitled
+  Cell 7b doc to make `embedding` the default and flipped `METHOD="embedding"`.
+
+### Context size / model / evidence record
+- Context builder caps at `max_tokens` minus `reserve_for_output` (default
+  4096−2048); scene summaries are truncated to fit, recorded in `context_meta`.
+- Model: real Qwen via the existing `QwenProvider` (gated, `generate_text`).
+- Per milestone §16, the real-run metrics (concepts generated, selected concept,
+  evidence coverage, failures, known hallucination cases, next bottleneck) are to
+  be recorded in `reports/director_validation.json` by
+  `scripts/run_director_validation.py` when executed on the validated movie
+  (`bc6384be-...`).
+
 ## Files Changed This Session (Real Qwen GPU Validation)
 
 - **Created**:
@@ -730,10 +811,33 @@ grep -A 20 "profiles:" configs/profiles.yaml
   - Documentation: `PROJECT_STATUS.md`, `NEXT_MILESTONE.md`,
     `DEVELOPMENT_ROADMAP.md` (measurement recorded)
 
+## Files Changed This Session (Movie-Grounded Creative Director)
+
+- **Created**:
+  - `src/director/scene_facts.py` — Movie Intelligence normalizer → `SceneFact`
+    records; hallucination-guard vocabulary.
+  - `src/director/context_builder.py` — compact, token-limited director context
+    (scene summaries + known-character/object/location vocabulary + memory).
+  - `src/director/evidence.py` — `EvidenceAnalyzer`: grounds concepts to real
+    scenes, coverage HIGH/MED/LOW, evidence strategy, visual motifs.
+  - `src/director/concepts.py` — prompt builders (generation / rejection /
+    plan), tolerant JSON parsing, diversity metric, generic-thesis detection.
+  - `src/director/report.py` — `reports/director_reasoning.md` renderer.
+  - `src/director/grounded.py` — `MovieGroundedDirector` orchestration.
+  - `scripts/run_director_validation.py` — gated real-Qwen Colab validation.
+  - `tests/test_grounded_director.py` (21 tests) and
+    `tests/test_grounded_director_real_qwen.py` (gated `llm_integration`).
+- **Modified**:
+  - `src/director/__init__.py` — export the new director modules.
+  - `notebooks/colab_vision_gpu.ipynb` — Cell 7d (grounded director); Cell 7b
+    default `METHOD="embedding"` + doc.
+  - Documentation: `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`,
+    `NEXT_MILESTONE.md`.
+
 ## Test Results
 
 ```
-191 fast tests ............................ PASS (incl. editorial, movie_understanding, vision, artifacts, retrieval, semantic-embedding suites)
+221 fast tests ............................ PASS (incl. 21 new grounded-director tests)
 ```
   - 26 Qwen provider tests (incl. placeholder-guard + plain-text fallback)
   - 10 Creative director tests
@@ -788,6 +892,11 @@ TOTAL: 191 passing, 0 failures
    1 GOOD / 2 PARTIAL / 5 WRONG (TF-IDF limits). Temporal probe: runs, mostly
    unanchored. Project earned its honest verdict — further improvement needs a
    semantic (embedder/LLM) retrieval layer + stronger temporal localization.
+✅ **Movie-grounded Creative Director**: reads the existing Movie Intelligence,
+   generates 5 diverse concepts with `required_evidence`, rejects unsupported /
+   generic ideas, selects the strongest grounded concept, emits a scene-aware
+   plan + `director_reasoning.md`. 221 fast tests pass. Real-Qwen clip
+   validation (Colab) is gated/pending execution.
 ⏳ **Real-Movie + Real-TTS GPU run**: notebook `colab_real_movie_tts.ipynb` ready;
    needs a user-supplied legally-owned movie to execute on a T4/A100
 ⏳ **Image/Video Generation**: Mocks complete, integration pending
