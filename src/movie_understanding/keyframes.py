@@ -8,7 +8,7 @@ success and raises on failure so callers can degrade to heuristic enrichment.
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 
 def _ffmpeg_available() -> bool:
@@ -17,6 +17,23 @@ def _ffmpeg_available() -> bool:
 
 def ffmpeg_available() -> bool:
     return _ffmpeg_available()
+
+
+def frame_times_for_window(start_sec: float, end_sec: float, n: int) -> List[float]:
+    """Exact sample timestamps (seconds, absolute) for a story window.
+
+    This is the single source of truth for where keyframes are captured. Every
+    consumer (extraction here, the vision enricher, the temporal probe) must use
+    these exact floats rather than re-deriving its own spacing — so the times
+    that get FFmpeg'd are the times that get persisted and the times the probe
+    reports. Coordinates are never rounded.
+    """
+    start = float(start_sec)
+    duration = max(0.0, float(end_sec) - start)
+    n = max(1, int(n))
+    if n == 1:
+        return [start + duration * 0.35]
+    return [start + duration * ((i + 0.5) / n) for i in range(n)]
 
 
 def _probe_duration(source_path: str) -> float:
@@ -76,12 +93,8 @@ def extract_scene_keyframes(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     frames: List[Path] = []
-    for i in range(n):
-        # Distribute samples across the window (not just the first frame).
-        if n == 1:
-            t = start + duration * 0.35  # slightly past the start: less likely to be a disolve edge
-        else:
-            t = start + duration * ((i + 0.5) / n)
+    times = frame_times_for_window(start, end, n)
+    for i, t in enumerate(times):
         out_path = out_dir / f"{scene_id}_k{i + 1:02d}.jpg"
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -106,6 +119,23 @@ def extract_scene_keyframes(
     return frames
 
 
+def extract_scene_keyframes_with_times(
+    source_path: str,
+    scene_start_sec: float,
+    scene_end_sec: float,
+    output_dir,
+    scene_id: str = "scene",
+    max_frames: int = 1,
+) -> List[Tuple[Path, float]]:
+    """Extract keyframes AND the exact absolute capture time of each frame."""
+    frames = extract_scene_keyframes(
+        source_path, scene_start_sec, scene_end_sec, output_dir,
+        scene_id=scene_id, max_frames=max_frames,
+    )
+    times = frame_times_for_window(scene_start_sec, scene_end_sec, len(frames))
+    return list(zip(frames, times))
+
+
 def extract_all_scene_keyframes(
     source_path: str,
     scenes: List[dict],
@@ -118,13 +148,36 @@ def extract_all_scene_keyframes(
     scene is skipped (returns ``""`` path list) so a partial vision pass never
     breaks the rest of the pipeline.
     """
+    return {
+        sid: list(entry.get("frames") or [])
+        for sid, entry in extract_all_scene_keyframes_with_times(
+            source_path, scenes, output_dir,
+            max_frames_per_scene=max_frames_per_scene,
+        ).items()
+    }
+
+
+def extract_all_scene_keyframes_with_times(
+    source_path: str,
+    scenes: List[dict],
+    output_dir,
+    max_frames_per_scene: int = 1,
+) -> dict:
+    """Extract keyframes + exact timestamps per scene.
+
+    Returns ``{scene_id: {"frames": [paths], "times_sec": [float]}}``. A failed
+    scene yields empty lists so a partial vision pass never breaks the rest of
+    the pipeline. ``times_sec`` are the exact absolute capture coordinates
+    (see :func:`frame_times_for_window`) — the values that must be persisted
+    and reused by the temporal probe.
+    """
     result: dict = {}
     for scene in scenes:
         sid = scene.get("scene_id")
         if not sid:
             continue
         try:
-            frames = extract_scene_keyframes(
+            pairs = extract_scene_keyframes_with_times(
                 source_path,
                 scene.get("start_sec", 0.0),
                 scene.get("end_sec", 0.0),
@@ -132,9 +185,12 @@ def extract_all_scene_keyframes(
                 scene_id=sid,
                 max_frames=max_frames_per_scene,
             )
-            result[sid] = [str(p) for p in frames]
+            result[sid] = {
+                "frames": [str(p) for p, _ in pairs],
+                "times_sec": [t for _, t in pairs],
+            }
         except Exception as e:
-            result[sid] = []
+            result[sid] = {"frames": [], "times_sec": []}
     return result
 
 

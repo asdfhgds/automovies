@@ -19,7 +19,6 @@ _STOPWORDS = {
 }
 
 _TOKEN_RE = re.compile(r"[a-zA-Z']+")
-_CAPS_RE = re.compile(r"\b([A-Z][a-zA-Z]+)\b")
 
 
 def tokenize(text: str) -> list:
@@ -48,25 +47,6 @@ def top_keywords(text: str, k: int = 5) -> list:
         counts[tok] = counts.get(tok, 0) + 1
     ordered = sorted(counts.items(), key=lambda kv: (-kv[1], len(kv[0])))
     return [w for w, _ in ordered[:k]]
-
-
-def candidate_names(text: str, min_mentions: int = 2) -> list:
-    """Capitalized multi-mention tokens as candidate character names.
-
-    Honest heuristic: no diarization / NER. It catches repeated proper nouns;
-    single-mention names and pronouns are intentionally missed. Real speakers
-    come from a future diarization or LLM pass.
-    """
-    if not text:
-        return []
-    counts: dict = {}
-    for match in _CAPS_RE.finditer(text):
-        name = match.group(1)
-        if name.lower() in _STOPWORDS or len(name) <= 2:
-            continue
-        counts[name] = counts.get(name, 0) + 1
-    ordered = sorted(counts.items(), key=lambda kv: -kv[1])
-    return [name for name, n in ordered if n >= min_mentions]
 
 
 def clamp(value: float, low: float, high: float) -> float:

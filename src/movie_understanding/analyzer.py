@@ -3,16 +3,30 @@
 Pipeline stage input:  ``transcripts/transcript.json`` + ``scenes/scene_index.json``
 Pipeline stage output: ``movie_index.json`` + ``semantic_index.json``
 
+Repair model:
+
+- ``scenes/scene_index.json`` holds the raw PySceneDetect **shots**; the
+  analyzer deterministically groups them into **narrative scenes** (see
+  :mod:`movie_understanding.grouping`). ``movie_index.shots`` keeps the raw
+  shot list; ``movie_index.scenes`` holds the narrative scenes (each carrying
+  its ``shot_ids`` / inline ``shots``).
+- every enriched scene carries ``key_frames`` AND ``key_frame_times_sec`` (the
+  exact absolute capture coordinates) when keyframe extraction runs, plus
+  ``analysis.transcript`` / ``analysis.visual`` alongside the merged ``story``.
+- temporal coordinates are exact floats, never rounded.
+
 ``movie_index.json``::
 
     {
       "project_id", "source_path", "movie": {"title", "duration_sec"},
-      "scenes": [ {scene_id, start_sec, end_sec, transcript, story: {...}} ],
+      "shots": [...], "scenes": [ {scene_id, start_sec, end_sec, transcript,
+                                    shot_ids, shots, key_frames,
+                                    key_frame_times_sec, analysis, story} ],
       "characters": [...], "events": [...],
-      "provenance": {"scene_enricher": "heuristic", "semantic_method": "tfidf"}
+      "provenance": {"scene_enricher", "grouping", "semantic_method",
+                     "word_level_timestamps", "keyframes"}
     }
 """
-import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -20,8 +34,17 @@ from movie_understanding import movie_memory
 from movie_understanding.character_analyzer import build_character_index
 from movie_understanding.enrich_factory import create_scene_enricher_from_env
 from movie_understanding.event_index import build_event_index
-from movie_understanding.scene_analyzer import HeuristicSceneEnricher, SceneEnricher
+from movie_understanding.grouping import (
+    DEFAULT_GAP_THRESHOLD_SEC,
+    describe_grouping,
+    group_shots_into_narrative_scenes,
+    shots_from_scene_index,
+)
+from movie_understanding.scene_analyzer import SceneEnricher
 from movie_understanding.semantic_index import SemanticIndex
+
+DEFAULT_GROUP_MAX_SCENE_SEC = 30.0
+DEFAULT_GROUP_MAX_SHOTS = 12
 
 
 def _load_scene_index(project_dir: Path) -> List[dict]:
@@ -31,7 +54,7 @@ def _load_scene_index(project_dir: Path) -> List[dict]:
     if scene_index is None:
         return []
     if isinstance(scene_index, dict):
-        scene_index = scene_index.get("scenes", [])
+        scene_index = scene_index.get("scenes", []) or scene_index.get("shots", [])
     return scene_index if isinstance(scene_index, list) else []
 
 
@@ -45,29 +68,49 @@ class MovieAnalyzer:
 
     def __init__(self, scene_enricher: Optional[SceneEnricher] = None,
                  embedder=None, attach_keyframes: bool = False,
-                 max_frames: int = 1):
+                 max_frames: int = 1,
+                 group_max_scene_sec: float = DEFAULT_GROUP_MAX_SCENE_SEC,
+                 group_max_shots: int = DEFAULT_GROUP_MAX_SHOTS,
+                 group_gap_threshold_sec: Optional[float] = DEFAULT_GAP_THRESHOLD_SEC):
         self.scene_enricher = scene_enricher or create_scene_enricher_from_env()
         self.embedder = embedder
         self.attach_keyframes = attach_keyframes
         self.max_frames = max_frames
+        self.group_max_scene_sec = group_max_scene_sec
+        self.group_max_shots = group_max_shots
+        self.group_gap_threshold_sec = group_gap_threshold_sec
 
     def analyze(self, project_dir: Path) -> dict:
         project_dir = Path(project_dir)
         meta = movie_memory.load_json(project_dir, "project_meta.json", {})
-        scenes = _load_scene_index(project_dir)
+        raw_scenes = _load_scene_index(project_dir)
         segments = _load_transcript_segments(project_dir)
 
-        if self.attach_keyframes and scenes:
-            from movie_understanding.keyframes import extract_all_scene_keyframes
-            kf_dir = project_dir / "scenes" / "keyframes"
-            frames = extract_all_scene_keyframes(
-                meta.get("source_path"), scenes, kf_dir,
-                max_frames_per_scene=self.max_frames,
+        pre_grouped = [s for s in raw_scenes
+                       if isinstance(s, dict) and (s.get("shot_ids") or s.get("shots"))]
+        if len(pre_grouped) == len(raw_scenes) and pre_grouped:
+            # Idempotent re-run: the input is already a set of narrative scenes
+            # (e.g. a previous repaired movie_index). Use them and rebuild the
+            # raw shot collection from their inline members.
+            scenes = [dict(s) for s in pre_grouped]
+            shots = _collect_shots(scenes)
+        else:
+            shots = shots_from_scene_index(raw_scenes)
+            scenes = group_shots_into_narrative_scenes(
+                shots,
+                max_scene_sec=self.group_max_scene_sec,
+                max_shots=self.group_max_shots,
+                gap_threshold_sec=self.group_gap_threshold_sec,
             )
-            for scene in scenes:
-                sid = scene.get("scene_id")
-                if sid:
-                    scene["key_frames"] = frames.get(sid) or []
+
+        if self.attach_keyframes and scenes:
+            from movie_understanding.keyframes import extract_all_scene_keyframes_with_times
+            from movie_understanding.vision_enricher import attach_keyframes_to_scenes
+            kf_dir = project_dir / "scenes" / "keyframes"
+            attach_keyframes_to_scenes(
+                scenes, meta.get("source_path"), kf_dir,
+                max_frames=self.max_frames,
+            )
 
         enriched = [
             self.scene_enricher.enrich(scene, segments)
@@ -88,14 +131,20 @@ class MovieAnalyzer:
             "source_path": meta.get("source_path"),
             "movie": {
                 "title": meta.get("title") or project_dir.name,
-                "duration_sec": round(duration, 3),
+                "duration_sec": duration,
             },
+            "shots": shots,
             "scenes": enriched,
             "characters": characters,
             "events": events,
             "scene_character_map": _scene_character_map(enriched),
             "provenance": {
                 "scene_enricher": self.scene_enricher.name,
+                "grouping": describe_grouping(
+                    max_scene_sec=self.group_max_scene_sec,
+                    max_shots=self.group_max_shots,
+                    gap_threshold_sec=self.group_gap_threshold_sec,
+                ),
                 "semantic_method": "tfidf" if self.embedder is None else "embedder",
                 "word_level_timestamps": _has_word_timestamps(segments),
                 "keyframes": bool(self.attach_keyframes),
@@ -128,6 +177,23 @@ def _scene_character_map(enriched: List[dict]) -> Dict[str, List[str]]:
         e["scene_id"]: e["story"]["characters"]
         for e in enriched
     }
+
+
+def _collect_shots(scenes: List[dict]) -> List[dict]:
+    """Rebuild the raw shot collection from pre-grouped narrative scenes."""
+    out: List[dict] = []
+    seen: set = set()
+    for scene in scenes:
+        by_id = {str(s.get("shot_id")): s for s in scene.get("shots") or []}
+        for sid in scene.get("shot_ids", []):
+            if sid in seen:
+                continue
+            shot = by_id.get(str(sid))
+            if shot is None:
+                continue
+            seen.add(sid)
+            out.append(shot)
+    return out
 
 
 def _has_word_timestamps(segments: List[dict]) -> bool:

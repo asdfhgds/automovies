@@ -50,6 +50,45 @@ def _vision_scene():
         "end_sec": 6.0,
         "duration_sec": 6.0,
         "transcript": "Sam spins the coin on the bar.",
+        "shot_ids": ["shot-1"],
+        "shot_count": 1,
+        "key_frames": ["/tmp/k1.jpg"],
+        "key_frame_times_sec": [1.2345678],
+        "analysis": {
+            "transcript": {
+                "summary": "Sam spins a coin at a bar.",
+                "topics": ["coin", "fate"],
+                "dialogue": [{"speaker": "Sam", "text": "fate controls everything",
+                              "start_sec": 3.0, "end_sec": 5.0}],
+                "characters": ["Sam"],
+                "emotional_tone": "mystery",
+                "provenance": {
+                    "summary": "transcript", "topics": "transcript_frequency",
+                    "dialogue": "transcript_alignment",
+                    "characters": "diarization_speaker_labels",
+                    "emotional_tone": "transcript_lexicon",
+                },
+            },
+            "visual": {
+                "location": "dim bar at night",
+                "actions": ["spins coin"],
+                "objects": ["coin", "counter", "shot glass"],
+                "visual_description": "A coin spins on a wooden bar under warm light.",
+                "visual_events": ["coin flip at ~1s", "Sam leans in at ~3s"],
+                "emotional_cues": ["furrowed brow", "hushed tone"],
+                "themes": ["fate", "control"],
+                "mood": "tense",
+                "cinematography": "close-up, shallow depth of field",
+                "confidence": 0.9,
+                "provenance": {
+                    "location": "qwen3vl", "actions": "qwen3vl",
+                    "objects": "qwen3vl", "visual_description": "qwen3vl",
+                    "visual_events": "qwen3vl", "emotional_cues": "qwen3vl",
+                    "themes": "qwen3vl", "mood": "qwen3vl",
+                    "cinematography": "qwen3vl", "confidence": "qwen3vl",
+                },
+            },
+        },
         "story": {
             "summary": "Sam spins a coin at a bar.",
             "topics": ["coin", "fate"],
@@ -67,14 +106,23 @@ def _vision_scene():
             "cinematography": "close-up, shallow depth of field",
             "confidence": 0.9,
             "provenance": {
+                "summary": "transcript", "topics": "transcript_frequency",
+                "dialogue": "transcript_alignment",
+                "characters": "diarization_speaker_labels",
                 "location": "qwen3vl", "actions": "qwen3vl",
                 "objects": "qwen3vl", "visual_description": "qwen3vl",
                 "visual_events": "qwen3vl", "emotional_cues": "qwen3vl",
+                "emotional_tone": "transcript_lexicon",
                 "themes": "qwen3vl", "mood": "qwen3vl",
                 "cinematography": "qwen3vl", "confidence": "qwen3vl",
             },
         },
     }
+
+
+def _shot():
+    return {"shot_id": "shot-1", "start_sec": 0.0, "end_sec": 6.0,
+            "transcript": "Sam spins the coin on the bar."}
 
 
 # ---------------------------------------------------------------------------
@@ -85,17 +133,25 @@ def _vision_scene():
 def test_write_scene_index_v2(tmp_path):
     movie_index = {"project_id": "p1", "movie": {"title": "Coin", "duration_sec": 16.0},
                    "provenance": {"scene_enricher": "qwen3vl"},
+                   "shots": [_shot()],
                    "scenes": [_vision_scene()]}
     path = artifacts.write_scene_index_v2(tmp_path, movie_index)
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["version"] == 2
-    assert data["scenes"][0]["scene_id"] == "scene-1"
-    card = data["scenes"][0]["story"]
+    assert data["version"] == 3
+    assert data["shots"][0]["shot_id"] == "shot-1"
+    scene = data["scenes"][0]
+    assert scene["scene_id"] == "scene-1"
+    assert scene["shot_ids"] == ["shot-1"]
+    assert scene["key_frame_times_sec"] == [1.2345678]
+    card = scene["story"]
     assert card["location"] == "dim bar at night"
     assert card["objects"] == ["coin", "counter", "shot glass"]
     assert card["visual_events"][0].startswith("coin flip")
     assert card["confidence"] == 0.9
     assert card["provenance"]["location"] == "qwen3vl"
+    # analysis halves are persisted too
+    assert data["scenes"][0]["analysis"]["transcript"]["characters"] == ["Sam"]
+    assert data["scenes"][0]["analysis"]["visual"]["location"] == "dim bar at night"
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +173,7 @@ def test_write_movie_memory_bundle(tmp_path):
     assert (mem_dir / "events.json").exists()
     manifest = json.loads((mem_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["scene_enricher"] == "qwen3vl"
-    assert manifest["scene_index_version"] == 2
+    assert manifest["scene_index_version"] == 3
 
 
 def test_write_movie_memory_bundle_with_semantic(tmp_path):
@@ -137,15 +193,16 @@ def test_write_movie_memory_bundle_with_semantic(tmp_path):
 def test_write_movie_understanding_report(tmp_path):
     movie_index = {"project_id": "p1", "movie": {"title": "Coin", "duration_sec": 16.0},
                    "provenance": {"scene_enricher": "qwen3vl"},
+                   "shots": [_shot()],
                    "scenes": [_vision_scene()]}
     movie_memory.save_movie_index(tmp_path, movie_index)
     path = artifacts.write_movie_understanding_report(tmp_path)
     text = path.read_text(encoding="utf-8")
     assert "Movie Understanding Report" in text
+    assert "Narrative scenes" in text
     assert "dim bar at night" in text
     assert "coin, counter, shot glass" in text
     assert "Confidence**: 0.9" in text
-    assert "Provenance" in text
 
 
 # ---------------------------------------------------------------------------
@@ -161,9 +218,14 @@ def test_movie_analyzer_emits_scene_v2_and_memory(tmp_path):
     assert (proj / "movie_memory" / "scene_index_v2.json").exists()
     assert (proj / "movie_memory" / "semantic_index.json").exists()
     v2 = json.loads((proj / "scene_index_v2.json").read_text(encoding="utf-8"))
-    assert v2["version"] == 2
+    assert v2["version"] == 3
     assert len(v2["scenes"]) == 2
     assert v2["scenes"][0]["story"]["location"] is None  # heuristic -> honest None
+    assert v2["scenes"][0]["analysis"]["transcript"]["characters"] == []
+    assert v2["scenes"][0]["analysis"]["visual"]["location"] is None
+    assert v2["scenes"][0]["shot_count"] == 1
+    assert v2["scenes"][0]["shot_ids"] == ["shot-1"]
+    assert [s["shot_id"] for s in v2["shots"]] == ["shot-1", "shot-2"]
 
 
 # ---------------------------------------------------------------------------

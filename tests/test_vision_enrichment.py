@@ -19,7 +19,10 @@ from movie_understanding.enrich_factory import (
 )
 from movie_understanding.keyframes import (
     extract_all_scene_keyframes,
+    extract_all_scene_keyframes_with_times,
     extract_scene_keyframes,
+    extract_scene_keyframes_with_times,
+    frame_times_for_window,
     snapshot_frame,
 )
 from movie_understanding.scene_analyzer import HeuristicSceneEnricher
@@ -87,6 +90,25 @@ def test_extract_all_returns_mapping(video, tmp_path):
     assert Path(mapping["scene-1"][0]).exists()
 
 
+@pytest.mark.skipif(not _ffmpeg_available(), reason="ffmpeg required")
+def test_extract_with_times_matches_shared_coordinates(video, tmp_path):
+    pairs = extract_scene_keyframes_with_times(
+        str(video), 3.0, 6.0, tmp_path / "kf", scene_id="scene-2", max_frames=3)
+    assert len(pairs) == 3
+    assert all(Path(p).exists() for p, _ in pairs)
+    expected = frame_times_for_window(3.0, 6.0, 3)
+    assert [t for _, t in pairs] == expected
+
+
+@pytest.mark.skipif(not _ffmpeg_available(), reason="ffmpeg required")
+def test_extract_all_with_times(video, tmp_path):
+    mapping = extract_all_scene_keyframes_with_times(
+        str(video), _scenes(), tmp_path / "kf", max_frames_per_scene=2)
+    assert set(mapping) == {"scene-1", "scene-2"}
+    assert len(mapping["scene-1"]["frames"]) == len(mapping["scene-1"]["times_sec"]) == 2
+    assert mapping["scene-1"]["times_sec"] == frame_times_for_window(0.0, 3.0, 2)
+
+
 def test_extract_scene_keyframes_missing_source(tmp_path):
     with pytest.raises(FileNotFoundError):
         extract_scene_keyframes(
@@ -103,6 +125,20 @@ def test_snapshot_frame(video, tmp_path):
     out = snapshot_frame(str(video), 1.0, tmp_path / "one.jpg")
     assert out.exists()
     assert out.suffix == ".jpg"
+
+
+def test_frame_times_exact_and_deterministic():
+    # repair #3: sample coordinates are exact floats, never rounded, and the
+    # shared function is the single source of truth for extraction + probe.
+    assert frame_times_for_window(0.0, 6.0, 2) == [1.5, 4.5]
+    assert frame_times_for_window(3.0, 6.0, 2) == [3.75, 5.25]
+    # a 2-decimal dt can't survive round-trips through 2-decimal rounding
+    assert frame_times_for_window(0.1234567, 6.0, 3) == [
+        0.1234567 + 5.8765433 * (0.5 / 3),
+        0.1234567 + 5.8765433 * (1.5 / 3),
+        0.1234567 + 5.8765433 * (2.5 / 3),
+    ]
+    assert frame_times_for_window(0.0, 6.0, 1) == [6.0 * 0.35]
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +403,14 @@ def test_fake_vl_populates_vision_fields():
     assert story["provenance"]["confidence"] == "qwen3vl"
     # transcript-derived fields survive
     assert isinstance(story["summary"], str)
+    # repair #4: the visual observations also live in analysis.visual,
+    # separate from the transcript half
+    analysis = out["analysis"]
+    assert analysis["visual"]["location"] == "bar"
+    assert analysis["visual"]["provenance"]["mood"] == "qwen3vl"
+    assert analysis["visual"]["objects"] == ["bottle", "counter"]
+    assert isinstance(analysis["transcript"]["summary"], str)
+    assert analysis["transcript"]["provenance"]["characters"] == "diarization_speaker_labels"
 
 
 def test_fake_vl_uses_existing_prose_fields():
@@ -376,7 +420,10 @@ def test_fake_vl_uses_existing_prose_fields():
     out = en.enrich(scene, [])
     story = out["story"]
     assert "Sam" in story["summary"]
-    assert "Sam" in story["characters"]
+    # repair #5: capitalized transcript words are NOT characters — and there
+    # are no diarization speaker labels here, so characters stay empty.
+    assert story["characters"] == []
+    assert out["analysis"]["transcript"]["characters"] == []
 
 
 def test_vision_unavailable_degrades_to_heuristic_fields_none():
@@ -463,12 +510,13 @@ def test_temporal_probe_string_events():
     )
     out = en.probe_temporal(_scene_with_keyframes(_scenes()[1]), [], n_frames=2)
     assert out["ok"] is True
-    # String events carry no explicit time -> anchored to the sampled frame time.
+    # String events carry no explicit time -> anchored to the sampled frame time,
+    # expressed in scene-relative seconds (offsets 0.75 and 2.25 for 3.0-6.0s).
     # (The fake returns the same 2 events for both frames → 4 anchored events.)
     assert out["visual_events"][0]["event"] == "character enters"
-    assert out["visual_events"][0]["time_sec"] == 3.75
-    assert out["visual_events"][1] == {"time_sec": 3.75, "event": "sits down"}
-    assert out["visual_events"][2]["time_sec"] == 5.25
+    assert out["visual_events"][0]["time_sec"] == 0.75
+    assert out["visual_events"][1] == {"time_sec": 0.75, "event": "sits down"}
+    assert out["visual_events"][2]["time_sec"] == 2.25
 
 
 def test_temporal_probe_single_image_per_frame():
@@ -486,11 +534,33 @@ def test_temporal_probe_single_image_per_frame():
     assert len(en._calls) == 2
     assert all(len(paths) == 1 for paths, _ in en._calls)
     assert out["method"] == "per-frame single-image sampling"
+    # Exact, unrounded capture coordinates (absolute movie seconds + offsets).
     assert out["sampled_times_sec"] == [3.75, 5.25]
+    assert out["sampled_times_rel_sec"] == [0.75, 2.25]
     # Duplicate event from the two frames is deduped after ordering.
     assert out["visual_events"] == [
         {"time_sec": 0.5, "event": "enter"},
     ]
+
+
+def test_temporal_probe_uses_stored_exact_keyframe_times():
+    """Repair #2: the probe must reuse the exact times the frames were
+    extracted at, never recompute its own spacing."""
+    en = _FakeVL(
+        answer='{"visual_events": [{"time_sec": 1.0, "event": "gesture"}], '
+               '"confidence": 0.6}'
+    )
+    scene = _scene_with_keyframes(_scenes()[1])  # 3.0-6.0s
+    scene["key_frame_times_sec"] = [3.124518, 5.987123]  # exact extraction coords
+    out = en.probe_temporal(scene, [], n_frames=2)
+    assert out["ok"] is True
+    # The reported sample coordinates match the stored ones verbatim
+    # (float-exact; the relative offsets are the raw difference, unrounded).
+    assert out["sampled_times_sec"] == [3.124518, 5.987123]
+    assert out["sampled_times_rel_sec"] == pytest.approx([0.124518, 2.987123])
+    # The prompt observes the frames at those exact offsets.
+    p0 = en._calls[0][1]
+    assert "0.124518" in p0 or "0.125" in p0
 
 
 def test_temporal_probe_needs_two_keyframes():
@@ -521,6 +591,14 @@ def test_movie_analyzer_uses_injected_vision_enricher(tmp_path):
     scenes = _scenes()
     for s in scenes:
         s["key_frames"] = ["/tmp/kf.jpg"]
+        # Mark these as already-grouped narrative scenes so the analyzer keeps
+        # the pre-attached keyframes instead of re-extracting (no video here).
+        s["shot_ids"] = [s["scene_id"]]
+        s["shots"] = [dict(start_sec=s["start_sec"], end_sec=s["end_sec"],
+                           transcript=s.get("transcript", ""), **{"shot_id": s["scene_id"]})]
+        s.pop("scene_id", None)
+        s.pop("duration", None)
+        s["scene_id"] = f"narrative-{s['shot_ids'][0]}"
     (tmp_path / "scenes" / "scene_index.json").write_text(
         json.dumps(scenes), encoding="utf-8")
     (tmp_path / "transcripts" / "transcript.json").write_text(

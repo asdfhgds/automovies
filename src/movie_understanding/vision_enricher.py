@@ -510,22 +510,38 @@ Answer now:"""
     # SceneEnricher interface
     # ------------------------------------------------------------------
 
+    def _base_analysis(self, scene: dict, transcript_segments: List[dict]) -> dict:
+        """Heuristic analysis skeleton (transcript-derived half set)."""
+        from movie_understanding.scene_analyzer import (
+            _transcript_analysis,
+            _visual_analysis_unavailable,
+        )
+        return {
+            "transcript": _transcript_analysis(scene, transcript_segments),
+            "visual": _visual_analysis_unavailable(),
+        }
+
     def _base_story(self, scene: dict, transcript_segments: List[dict]) -> dict:
-        """Heuristic story skeleton (transcript-derived fields)."""
-        from movie_understanding.scene_analyzer import HeuristicSceneEnricher
-        story = HeuristicSceneEnricher().enrich(scene, transcript_segments)["story"]
-        return story
+        """Merged story from the heuristic analysis skeleton."""
+        from movie_understanding.scene_analyzer import merge_story
+        return merge_story(self._base_analysis(scene, transcript_segments))
+
+    def _unavailable_analysis(self, scene: dict, transcript_segments: List[dict],
+                              reason: str) -> dict:
+        """Analysis whose every visual field is unset with a provenance reason."""
+        analysis = self._base_analysis(scene, transcript_segments)
+        for field in ("location", "actions", "objects", "visual_description",
+                      "visual_events", "emotional_cues", "themes", "mood",
+                      "cinematography", "confidence"):
+            analysis["visual"][field] = None
+            analysis["visual"]["provenance"][field] = f"unavailable ({reason})"
+        return analysis
 
     def _unavailable_story(self, scene: dict, transcript_segments: List[dict],
                            reason: str) -> dict:
         """Story with vision fields marked unavailable and a provenance reason."""
-        story = self._base_story(scene, transcript_segments)
-        for field in ("location", "actions", "objects", "visual_description",
-                      "visual_events", "emotional_cues", "themes", "mood",
-                      "cinematography", "confidence"):
-            story[field] = None
-            story["provenance"][field] = f"unavailable ({reason})"
-        return story
+        from movie_understanding.scene_analyzer import merge_story
+        return merge_story(self._unavailable_analysis(scene, transcript_segments, reason))
 
     @staticmethod
     def _scene_shell(scene: dict) -> dict:
@@ -537,6 +553,10 @@ Answer now:"""
                 float(scene.get("end_sec", 0.0)) - float(scene.get("start_sec", 0.0))
             ),
             "transcript": (scene.get("transcript") or "").strip(),
+            "shot_ids": scene.get("shot_ids") or [],
+            "shot_count": scene.get("shot_count"),
+            "key_frames": scene.get("key_frames") or [],
+            "key_frame_times_sec": scene.get("key_frame_times_sec") or [],
         }
 
     def enrich(self, scene: dict, transcript_segments: List[dict]) -> dict:
@@ -558,6 +578,7 @@ Answer now:"""
             logger.warning(f"Scene {scene_id}: vision unavailable ({reason}); using heuristic")
             return {
                 **self._scene_shell(scene),
+                "analysis": self._unavailable_analysis(scene, transcript_segments, reason),
                 "story": self._unavailable_story(scene, transcript_segments, reason),
             }
 
@@ -573,6 +594,7 @@ Answer now:"""
             logger.warning(f"Scene {scene_id}: {reason}; using heuristic")
             return {
                 **self._scene_shell(scene),
+                "analysis": self._unavailable_analysis(scene, transcript_segments, reason),
                 "story": self._unavailable_story(scene, transcript_segments, reason),
             }
 
@@ -595,8 +617,10 @@ Answer now:"""
                 f"Scene {scene_id} vision response was not valid JSON: {output[:200]}"
             )
 
-        story = self._base_story(scene, transcript_segments)
-        story.update({
+        from movie_understanding.scene_analyzer import merge_story
+
+        analysis = self._base_analysis(scene, transcript_segments)
+        analysis["visual"].update({
             "location": _clean_str(parsed.get("location")),
             "actions": _clean_list(parsed.get("actions")),
             "objects": _clean_list(parsed.get("objects")),
@@ -608,20 +632,15 @@ Answer now:"""
             "cinematography": _clean_str(parsed.get("cinematography")),
             "confidence": _clean_confidence(parsed.get("confidence")),
         })
-        story["provenance"].update({
-            "location": self.name,
-            "actions": self.name,
-            "objects": self.name,
-            "visual_description": self.name,
-            "visual_events": self.name,
-            "emotional_cues": self.name,
-            "themes": self.name,
-            "mood": self.name,
-            "cinematography": self.name,
-            "confidence": self.name,
+        analysis["visual"]["provenance"].update({
+            field: self.name
+            for field in ("location", "actions", "objects", "visual_description",
+                          "visual_events", "emotional_cues", "themes", "mood",
+                          "cinematography", "confidence")
         })
+        story = merge_story(analysis)
 
-        return {**self._scene_shell(scene), "story": story}
+        return {**self._scene_shell(scene), "analysis": analysis, "story": story}
 
     # ------------------------------------------------------------------
     # Temporal probe (evaluation): ordered visual events w/ approx time
@@ -634,8 +653,9 @@ Answer now:"""
 
 ## Frame
 I have attached a single keyframe captured at approximately {approx_sec:g}s
-into the scene window
-({float(scene.get('start_sec', 0.0)):g}s - {float(scene.get('end_sec', 0.0)):g}s).
+after the scene start. The scene window runs from
+{float(scene.get('start_sec', 0.0)):g}s to {float(scene.get('end_sec', 0.0)):g}s
+in the movie (this frame is therefore at movie-time ~{float(scene.get('start_sec', 0.0)) + approx_sec:g}s).
 
 ## Scene transcript (dialogue / narration audible during the scene)
 {transcript_text[:400] or "(no dialogue in this scene)"}
@@ -699,21 +719,28 @@ Answer now:"""
 
         start = float(scene.get("start_sec", 0.0))
         end = float(scene.get("end_sec", start))
-        duration = max(0.0, end - start)
         frames = keyframes[: max(2, int(n_frames))]
-        # Approximate capture time per keyframe - mirrors keyframes.py spacing.
-        n = len(frames)
-        if n == 1:
-            times = [start + duration * 0.35]
+
+        from movie_understanding.keyframes import frame_times_for_window
+
+        stored = [t for t in (scene.get("key_frame_times_sec") or []) if t is not None]
+        if len(stored) >= len(frames):
+            # Exact coordinates used when the frames were actually extracted.
+            times = stored[: len(frames)]
         else:
-            times = [start + duration * ((i + 0.5) / n) for i in range(n)]
+            # Back-compat fallback: derive the same formula, never rounded.
+            times = frame_times_for_window(start, end, len(frames))
+
+        # The model reasons in scene-relative seconds ("into the scene window").
+        offsets = [t - start for t in times]
 
         events: List[dict] = []
         confidences: List[float] = []
         limitations: List[str] = []
-        for frame, approx_sec in zip(frames, times):
+        for frame, approx_sec in zip(frames, offsets):
             prompt = self._build_temporal_prompt(
-                scene, transcript_text, approx_sec=approx_sec, frame_count=n)
+                scene, transcript_text, approx_sec=approx_sec,
+                frame_count=len(frames))
             try:
                 output = self._generate([frame], prompt)
             except Exception as e:
@@ -759,7 +786,9 @@ Answer now:"""
                            if confidences else None),
             "limitation": " | ".join(limitations) or None,
             "method": "per-frame single-image sampling",
-            "sampled_times_sec": [round(t, 2) for t in times],
+            # Exact, unrounded capture coordinates (absolute movie seconds).
+            "sampled_times_sec": times,
+            "sampled_times_rel_sec": offsets,
         }
 
 
@@ -799,7 +828,11 @@ def _clean_confidence(value) -> Optional[float]:
 
 
 def _clean_sec(value) -> Optional[float]:
-    """Parse an approximate seconds offset (non-negative, not clamped to 1)."""
+    """Parse an approximate seconds offset (exact float, clamped to >= 0).
+
+    Deliberately does NOT round so reported event offsets and capture
+    coordinates keep their full precision end to end.
+    """
     if value is None:
         return None
     try:
@@ -808,7 +841,7 @@ def _clean_sec(value) -> Optional[float]:
         return None
     if s != s:  # NaN
         return None
-    return round(max(0.0, s), 2)
+    return max(0.0, s)
 
 
 def attach_keyframes_to_scenes(
@@ -817,19 +850,23 @@ def attach_keyframes_to_scenes(
     keyframe_dir,
     max_frames: int = 1,
 ) -> List[dict]:
-    """Extract keyframes for each scene and attach ``key_frames`` to it.
+    """Extract keyframes for each scene and attach ``key_frames`` + the exact
+    ``key_frame_times_sec`` coordinates to it.
 
     A scene that cannot be extracted (missing file, ffmpeg missing) keeps an
-    empty ``key_frames`` list; the enricher then degrades to heuristic.
+    empty ``key_frames`` / ``key_frame_times_sec``; the enricher then degrades
+    to heuristic.
     """
-    from movie_understanding.keyframes import extract_all_scene_keyframes
+    from movie_understanding.keyframes import extract_all_scene_keyframes_with_times
 
-    frames = extract_all_scene_keyframes(
+    frames = extract_all_scene_keyframes_with_times(
         source_path, scenes, keyframe_dir, max_frames_per_scene=max_frames
     )
     for scene in scenes:
         sid = scene.get("scene_id")
         if not sid:
             continue
-        scene["key_frames"] = frames.get(sid) or []
+        entry = frames.get(sid) or {}
+        scene["key_frames"] = entry.get("frames") or []
+        scene["key_frame_times_sec"] = entry.get("times_sec") or []
     return scenes

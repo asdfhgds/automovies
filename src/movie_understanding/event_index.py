@@ -85,8 +85,8 @@ def _finish_event(current: dict) -> dict:
     text = " ".join((s.get("text") or "").strip() for s in current["segs"] if s)
     return {
         "scene_id": current["scene_id"],
-        "start_sec": round(current["start"], 3),
-        "end_sec": round(current["end"], 3),
+        "start_sec": current["start"],
+        "end_sec": current["end"],
         "dialogue_ids": [s.get("id") or "seg" for s in current["segs"]],
         "summary_text": text[:220] if text else None,
         "keywords": text_utils.top_keywords(text, k=5),

@@ -1,13 +1,14 @@
 """Movie intelligence artifacts — the validated scene knowledge the director
 consumes.
 
-After ``MovieAnalyzer`` builds the in-memory index this module persists three
+After ``MovieAnalyzer`` builds the in-memory index this module persists four
 things a downstream Creative Director needs:
 
-- ``scene_index_v2.json`` — a versioned, enriched scene index: every scene with
-  its transcript + story card (characters, actions, objects, location, visual
-  summary, visual events, emotional cues, themes, mood, cinematography,
-  confidence) plus per-field provenance.
+- ``scene_index_v2.json`` — a versioned, enriched scene index. v3 carries the
+  repaired model: the raw ``shots`` collection, deterministic ``scenes``
+  (narrative groupings with their ``shot_ids``), per-scene exact
+  ``key_frame_times_sec``, the split ``analysis.transcript`` /
+  ``analysis.visual`` cards AND the merged per-field-provenance ``story`` view.
 - ``movie_memory/`` — a self-contained directory bundle of the movie
   intelligence layer (movie index, scene index v2, semantic index, characters,
   events) so later stages can load one folder.
@@ -23,6 +24,7 @@ from typing import Optional
 from movie_understanding import movie_memory
 
 SCENE_INDEX_V2 = "scene_index_v2.json"
+SCENE_INDEX_VERSION = 3
 MOVIE_MEMORY_DIR = "movie_memory"
 REPORT_PATH = "reports/movie_understanding_report.md"
 
@@ -49,7 +51,36 @@ def _story_card(scene: dict) -> dict:
     }
 
 
+def _analysis_card(scene: dict) -> dict:
+    """Split transcript vs visual analysis halves (verbatim, with provenance)."""
+    analysis = scene.get("analysis") or {}
+    return {
+        "transcript": {
+            "summary": analysis.get("transcript", {}).get("summary"),
+            "topics": analysis.get("transcript", {}).get("topics") or [],
+            "dialogue": analysis.get("transcript", {}).get("dialogue") or [],
+            "characters": analysis.get("transcript", {}).get("characters") or [],
+            "emotional_tone": analysis.get("transcript", {}).get("emotional_tone"),
+            "provenance": analysis.get("transcript", {}).get("provenance") or {},
+        },
+        "visual": {
+            "location": analysis.get("visual", {}).get("location"),
+            "actions": analysis.get("visual", {}).get("actions") or [],
+            "objects": analysis.get("visual", {}).get("objects") or [],
+            "visual_description": analysis.get("visual", {}).get("visual_description"),
+            "visual_events": analysis.get("visual", {}).get("visual_events") or [],
+            "emotional_cues": analysis.get("visual", {}).get("emotional_cues") or [],
+            "themes": analysis.get("visual", {}).get("themes") or [],
+            "mood": analysis.get("visual", {}).get("mood"),
+            "cinematography": analysis.get("visual", {}).get("cinematography"),
+            "confidence": analysis.get("visual", {}).get("confidence"),
+            "provenance": analysis.get("visual", {}).get("provenance") or {},
+        },
+    }
+
+
 def _scene_index_v2(movie_index: dict) -> dict:
+    shots = movie_index.get("shots", [])
     scenes = []
     for scene in movie_index.get("scenes", []):
         scenes.append({
@@ -58,13 +89,26 @@ def _scene_index_v2(movie_index: dict) -> dict:
             "end_sec": scene.get("end_sec"),
             "duration_sec": scene.get("duration_sec"),
             "transcript": scene.get("transcript"),
+            "shot_ids": scene.get("shot_ids") or [],
+            "shot_count": scene.get("shot_count"),
             "key_frames": scene.get("key_frames") or [],
+            "key_frame_times_sec": scene.get("key_frame_times_sec") or [],
+            "analysis": _analysis_card(scene),
             "story": _story_card(scene),
         })
     return {
-        "version": 2,
+        "version": SCENE_INDEX_VERSION,
         "project_id": movie_index.get("project_id"),
         "movie": movie_index.get("movie", {}),
+        "shots": [
+            {
+                "shot_id": s.get("shot_id"),
+                "start_sec": s.get("start_sec"),
+                "end_sec": s.get("end_sec"),
+                "transcript": s.get("transcript"),
+            }
+            for s in shots
+        ],
         "provenance": movie_index.get("provenance", {}),
         "scenes": scenes,
     }
@@ -96,8 +140,9 @@ def write_movie_memory_bundle(project_dir: Path, movie_index: dict) -> Path:
         mem_dir,
         "manifest.json",
         {
-            "scene_index_version": 2,
+            "scene_index_version": SCENE_INDEX_VERSION,
             "scene_enricher": movie_index.get("provenance", {}).get("scene_enricher"),
+            "grouping": movie_index.get("provenance", {}).get("grouping"),
             "keyframes": bool(movie_index.get("provenance", {}).get("keyframes")),
         },
     )
@@ -131,7 +176,9 @@ def build_movie_understanding_report(project_dir: Path) -> str:
         f"- **Project**: {idx.get('project_id', '?')}",
         f"- **Title**: {movie.get('title', '?')}",
         f"- **Duration (s)**: {movie.get('duration_sec', '?')}",
-        f"- **Scenes**: {len(scenes)}",
+        f"- **Narrative scenes**: {len(scenes)}",
+        f"- **Raw shots**: {len(idx.get('shots', []))}",
+        f"- **Grouping**: `{prov.get('grouping', {}).get('method', '?')}`",
         f"- **Scene enricher**: {prov.get('scene_enricher', '?')}",
         f"- **Semantic method**: {prov.get('semantic_method', '?')}",
         f"- **Keyframes attached**: {prov.get('keyframes', False)}",
@@ -142,12 +189,16 @@ def build_movie_understanding_report(project_dir: Path) -> str:
     vision_filled = 0
     for i, scene in enumerate(scenes, 1):
         s = scene.get("story") or {}
+        analysis = scene.get("analysis") or {}
         sid = scene.get("scene_id", f"scene-{i}")
         lines += [
             f"## {i}. {sid}",
             "",
             f"- **Time**: {_fmt_line(scene.get('start_sec'))} - {_fmt_line(scene.get('end_sec'))} s"
             f" (duration {_fmt_line(scene.get('duration_sec'))})",
+            f"- **Shots**: {_fmt_list(scene.get('shot_ids'))}"
+            + ("" if scene.get("shot_count") is None
+               else f" (n={scene.get('shot_count')})"),
             f"- **Transcript**: {_fmt_line(scene.get('transcript'))}",
             f"- **Characters**: {_fmt_list(s.get('characters'))}",
             f"- **Location**: {_fmt_line(s.get('location'))}",
@@ -161,21 +212,17 @@ def build_movie_understanding_report(project_dir: Path) -> str:
             f"- **Mood**: {_fmt_line(s.get('mood'))}",
             f"- **Cinematography**: {_fmt_line(s.get('cinematography'))}",
             f"- **Confidence**: {_fmt_line(s.get('confidence'))}",
-            f"- **Provenance**: `{s.get('provenance') or {}}`",
             "",
         ]
-        p = s.get("provenance") or {}
-        if all(
-            p.get(k) == idx.get("provenance", {}).get("scene_enricher")
-            for k in ("location", "visual_description", "mood")
-        ):
+        visual_prov = (analysis.get("visual") or {}).get("provenance") or {}
+        if visual_prov.get("location") == prov.get("scene_enricher"):
             vision_filled += 1
 
     lines += [
         "## Coverage",
         "",
-        f"- Scenes with vision-filled `location`/`visual_description`/`mood`: "
-        f"{vision_filled}/{len(scenes)}",
+        f"- Narrative scenes with vision-enriched `analysis.visual` (per-field "
+        f"provenance == `{prov.get('scene_enricher', '?')}`): {vision_filled}/{len(scenes)}",
         "",
     ]
     return "\n".join(lines)
