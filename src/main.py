@@ -114,6 +114,9 @@ def main():
     p_bench.add_argument('--output-dir', default='reports', help='Output directory for wavs + report')
 
     p_doctor = sub.add_parser('doctor', help='Run environment health checks')
+    p_doctor.add_argument('--json', action='store_true',
+                          help='Print the health-check report as a single-line JSON object '
+                               '(for machine parsing; no human-readable sections)')
 
     args = parser.parse_args()
     if args.cmd == 'init':
@@ -124,8 +127,12 @@ def main():
         benchmark_tts(args)
     elif args.cmd == 'doctor':
         # lightweight import of doctor checks
-        from utils.doctor import print_report
-        print_report()
+        import json as _json
+        from utils.doctor import print_report, run_checks
+        if getattr(args, 'json', False):
+            print(_json.dumps(run_checks(), ensure_ascii=False))
+        else:
+            print_report()
     else:
         parser.print_help()
 

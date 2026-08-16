@@ -193,15 +193,16 @@ out = subprocess.run(["python", "src/main.py", "doctor"],
 text = (out.stdout or "") + (out.stderr or "")
 print(text[-6000:] if len(text) > 6000 else text)
 
-# 2) parse the doctor JSON summary and FAIL LOUDLY on anything required.
+# 2) doctor — single-line JSON summary (machine-parseable). This avoids the
+# fragile "scan reversed lines for one starting with {" approach: the human
+# report is pretty-printed across many lines and cannot be loaded line-by-line.
+out2 = subprocess.run(["python", "src/main.py", "doctor", "--json"],
+                      capture_output=True, text=True)
 summary = None
-for line in reversed(((out.stdout or "") + (out.stderr or "")).splitlines()):
-    if line.lstrip().startswith("{"):
-        try:
-            summary = json.loads(line)
-            break
-        except Exception:
-            summary = None
+try:
+    summary = json.loads((out2.stdout or "").strip())
+except Exception:
+    summary = None
 if summary is None:
     raise RuntimeError("VALIDATION FAILED: could not parse doctor JSON summary. "
                        "Check the doctor output above.")
@@ -212,8 +213,12 @@ if not (summary.get("torch") or {}).get("cuda_available"):
     errors.append("CUDA unavailable")
 if not summary.get("ffmpeg"):
     errors.append("ffmpeg missing")
-if not summary.get("whisperx"):
-    errors.append("whisperx missing")
+# Real transcription: the pipeline prefers WhisperX but transparently falls
+# back to openai/whisper (which colab_setup.sh actually installs). Accept
+# either one; do not demand WhisperX specifically.
+trans = (summary.get("providers") or {}).get("transcription") or {}
+if not (summary.get("whisperx") or trans.get("whisper")):
+    errors.append("no real transcriptor (whisperx or whisper)")
 if not summary.get("pyscenedetect"):
     errors.append("pyscenedetect missing")
 if not summary.get("transformers"):
