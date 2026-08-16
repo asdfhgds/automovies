@@ -1,6 +1,7 @@
 """Minimal CLI for the Autonomous Movie Studio MVP scaffold."""
 import argparse
 import json
+import os
 import uuid
 from pathlib import Path
 from app.orchestrator import start_pipeline
@@ -72,6 +73,9 @@ def run(args):
     if not project_id:
         print("Error: --project-id required for run")
         return 1
+    profile = getattr(args, 'profile', None)
+    if profile:
+        os.environ['STUDIO_PROFILE'] = profile
     # Validate project and source
     project_dir = DEFAULT_DATA_DIR / project_id
     meta = None
@@ -99,6 +103,8 @@ def main():
 
     p_run = sub.add_parser('run', help='Run pipeline for a project')
     p_run.add_argument('--project-id', help='Existing project id')
+    p_run.add_argument('--profile', default=None,
+                       help='Profile override (local|colab-gpu). Sets STUDIO_PROFILE.')
 
     p_bench = sub.add_parser('benchmark-tts', help='Benchmark available TTS providers on a shared narration')
     p_bench.add_argument('--text', help='Narration text to synthesize')

@@ -1,7 +1,73 @@
 """Mock LLM provider for testing (no API calls)."""
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from .base import LLMProvider
+
+
+class GroundedMockLLM:
+    """A ``Callable[[str], str]`` mock for the grounded director's raw ``llm``.
+
+    The grounded director (``MovieGroundedDirector``) expects an ``llm`` of the
+    form ``str -> str`` that answers its concept-generation and plan prompts
+    with milestone-schema JSON. This callable does that deterministically and
+    keeps required_evidence grounded in the *real* scene facts (via
+    ``_mock_evidence``), so concepts can pass the evidence gate — exactly like
+    the real runs, but with no model download.
+    """
+
+    def __init__(self, scene_index: Optional[List[Dict[str, Any]]] = None,
+                 concepts: Optional[List[Dict[str, Any]]] = None):
+        self.scene_index = scene_index or []
+        self._concepts = concepts or []
+        self.calls: List[str] = []
+
+    def __call__(self, prompt: str) -> str:
+        self.calls.append(prompt)
+        if "finalizing the plan" in prompt:
+            return json.dumps({
+                "concept": {
+                    "title": self._concepts[0]["title"] if self._concepts else "Grounded Concept",
+                    "hook": self._concepts[0]["hook"] if self._concepts else "",
+                    "thesis": self._concepts[0]["thesis"] if self._concepts else "",
+                },
+                "format": {"type": "short_video_essay", "duration_sec": 90},
+                "editorial_direction": {
+                    "pacing": "measured, builds toward the reveal",
+                    "visual_style": "grounded close-ups of the evidence scenes",
+                    "audio_style": "restrained score under narration",
+                    "editing_style": "cut to the excerpt when the claim lands",
+                },
+            })
+        if self._concepts:
+            return json.dumps({"concepts": self._concepts})
+        # Build grounded concepts from the real scene index (nothing invented).
+        evidence = _mock_evidence(self.scene_index)
+        concepts = [
+            {
+                "title": "The Hidden Argument in Plain Sight",
+                "hook": "What looks like a small detail is actually the film's argument.",
+                "thesis": "The film arranges its visible details so that the smallest "
+                          "on-screen moment carries the weight of the whole idea.",
+                "why_interesting": "The movie makes its point through what it chooses to show, "
+                                   "not through what it says.",
+                "required_evidence": evidence,
+                "visual_opportunity": "Slow push-ins on the evidence objects during the reveals.",
+                "format": "short_video_essay",
+                "diversity_angle": "symbolism",
+            },
+            {
+                "title": "Decoding the Frame",
+                "hook": "Every frame is a decision. Let's decode what this one chose.",
+                "thesis": "The film's framing and placement of characters quietly "
+                          "organizes how we should feel about the action.",
+                "why_interesting": "The composition itself is the argument — the camera is the writer.",
+                "required_evidence": evidence,
+                "visual_opportunity": "Match-cuts between the composition and the action it frames.",
+                "format": "short_video_essay",
+                "diversity_angle": "cinematography",
+            },
+        ]
+        return json.dumps({"concepts": concepts})
 
 
 def _mock_evidence(scene_index: List[Dict[str, Any]]) -> List[str]:

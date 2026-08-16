@@ -83,9 +83,23 @@ def start_pipeline(project_id: str):
     except Exception as e:
         print(f"Scene indexing failed: {e}")
 
-    # Phase: Director planning (creative Qwen or deterministic fallback)
+    # Phase: Movie intelligence (transcripts + scenes -> movie_index.json).
+    # Must run BEFORE the director when the grounded director is enabled: the
+    # director reasons over the enriched movie intelligence (Qwen3-VL story
+    # cards when VISION_ENRICHER=qwen3vl), not raw shots.
+    grounded_director = os.getenv('GROUNDED_DIRECTOR', 'false').lower() == 'true'
+    if grounded_director:
+        vt0 = time.monotonic()
+        manifest['vision_enricher'] = _build_movie_index_if_needed(project_dir, strict)
+        manifest['vision_seconds'] = round(time.monotonic() - vt0, 2)
+
+    # Phase: Director planning (grounded | creative Qwen | deterministic fallback)
+    # GROUNDED_DIRECTOR=true routes through the movie-grounded Creative Director,
+    # making its selected concept + evidence the source of truth for the script
+    # and editorial stages below.
     plan_path = None
-    use_creative = strict or os.getenv('CREATIVE_DIRECTOR_ENABLED', 'false').lower() == 'true'
+    use_creative = ((strict or os.getenv('CREATIVE_DIRECTOR_ENABLED', 'false').lower() == 'true')
+                    and not grounded_director)
     director_provider = 'deterministic'
     director_model = None
     director_device = None
@@ -114,7 +128,19 @@ def start_pipeline(project_id: str):
                 meta = json.load(f)
                 movie_metadata["title"] = meta.get("title", "Untitled")
 
-        if use_creative and scene_index and transcript:
+        if grounded_director:
+            api = _run_grounded_director(project_dir, meta_path, movie_metadata,
+                                         strict, target_sec=float(os.getenv('EDITORIAL_TARGET_SEC', '90')))
+            plan_path = api.get('plan_path')
+            director_provider = api.get('director_provider', director_provider)
+            director_model = api.get('director_model')
+            director_device = api.get('director_device')
+            director_real = api.get('director_real', False)
+            if api.get('error'):
+                if strict:
+                    raise RuntimeError(f"Grounded director failed in strict mode: {api['error']}")
+                print(f"Grounded director failed: {api['error']}")
+        elif use_creative and scene_index and transcript:
             from director.creative_director import CreativeDirector
             from director.provider_factory import get_director_config_from_env, get_llm_provider_from_config
 
@@ -212,26 +238,47 @@ def start_pipeline(project_id: str):
     # Requires the movie index (transcripts + scenes already built above).
     if editorial_mode:
         try:
-            from movie_understanding.analyzer import MovieAnalyzer
-            vision_requested = os.getenv('VISION_ENRICHER', 'heuristic').lower() == 'qwen3vl'
-            MovieAnalyzer(
-                attach_keyframes=vision_requested,
-                max_frames=int(os.getenv('VISION_MAX_FRAMES', '1')),
-            ).analyze(project_dir)
+            manifest['vision_enricher'] = _build_movie_index_if_needed(project_dir, strict)
             print("Editorial: movie_index.json + semantic_index.json built")
         except Exception as e:
             raise RuntimeError(f"Editorial movie analysis failed: {e}") from e
 
         try:
+            sed_t0 = time.monotonic()
             from editorial.director import create_editorial_plan
+            from editorial.grounded import GroundedEditorialPlanner
             from editorial.script import build_editorial_script
             from editorial.timeline import EditorialTimelineBuilder
             from movie_understanding import movie_memory
 
-            plan = create_editorial_plan(
-                project_dir,
-                creative_task=os.getenv('EDITORIAL_CREATIVE_TASK', ''),
-                target_sec=float(os.getenv('EDITORIAL_TARGET_SEC', '90')))
+            # Grounded path: the editor consumes the grounded script's sections
+            # + real excerpt windows (no fresh retrieval). Otherwise (default)
+            # use the heuristic planner as before.
+            grounded_plan = movie_memory.load_json(project_dir, "director_plan.json", {})
+            use_grounded_editorial = bool(grounded_plan.get("grounded"))
+            if use_grounded_editorial:
+                from script.grounded import load_grounded_script
+                grounded_script = load_grounded_script(project_dir)
+                if grounded_script and grounded_script.get("sections"):
+                    planner = GroundedEditorialPlanner(script=grounded_script)
+                    plan = planner.create_plan(
+                        movie_index=movie_memory.load_movie_index(project_dir),
+                        director_plan=grounded_plan,
+                        creative_task=os.getenv('EDITORIAL_CREATIVE_TASK', ''),
+                        target_sec=float(os.getenv('EDITORIAL_TARGET_SEC', '90')),
+                    )
+                    movie_memory.save_json(project_dir, "editorial_plan.json", plan.to_dict())
+                else:
+                    plan = create_editorial_plan(
+                        project_dir,
+                        creative_task=os.getenv('EDITORIAL_CREATIVE_TASK', ''),
+                        target_sec=float(os.getenv('EDITORIAL_TARGET_SEC', '90')))
+            else:
+                plan = create_editorial_plan(
+                    project_dir,
+                    creative_task=os.getenv('EDITORIAL_CREATIVE_TASK', ''),
+                    target_sec=float(os.getenv('EDITORIAL_TARGET_SEC', '90')))
+
             movie_index = movie_memory.load_movie_index(project_dir)
             script = build_editorial_script(project_dir, plan, movie_index)
             editorial_plan_built = True
@@ -247,6 +294,10 @@ def start_pipeline(project_id: str):
                 len(seg.get('video', []))
                 for seg in timeline.get('segments', []))
             print(f"Editorial: timeline wrote {n_video} excerpt clip(s)")
+            manifest['script_seconds'] = round(time.monotonic() - sed_t0, 2)
+            manifest['script_provider'] = 'editorial'
+            manifest['script_real_generation'] = bool(director_real)
+            manifest['script_model'] = director_model
         except Exception as e:
             if strict:
                 raise RuntimeError(f"Editorial planning failed in strict mode: {e}") from e
@@ -423,6 +474,36 @@ def _director_config():
     return get_director_config_from_env()
 
 
+def _build_movie_index_if_needed(project_dir, strict: bool) -> str:
+    """Build movie_index.json + semantic_index.json only when missing or stale.
+
+    The Grounded director reasons over the enriched movie intelligence, so this
+    runs BEFORE the director phase (not inside the editorial block). Idempotent:
+    a fresh Colab run never rebuilds a movie index that already matches the
+    requested VISION_ENRICHER. Returns the scene enricher name actually used.
+    """
+    from movie_understanding.analyzer import MovieAnalyzer
+    from movie_understanding import movie_memory
+
+    vision_requested = os.getenv('VISION_ENRICHER', 'heuristic').lower() == 'qwen3vl'
+    want = 'qwen3vl' if vision_requested else 'heuristic'
+    existing = movie_memory.load_movie_index(project_dir)
+    if existing is not None:
+        if (existing.get("provenance") or {}).get("scene_enricher") == want:
+            print(f"Movie intelligence already current (enricher={want}); skipping build")
+            return want
+    try:
+        MovieAnalyzer(
+            attach_keyframes=vision_requested,
+            max_frames=int(os.getenv('VISION_MAX_FRAMES', '1')),
+        ).analyze(project_dir)
+    except Exception as e:
+        if strict:
+            raise RuntimeError(f"Movie intelligence build failed in strict mode: {e}") from e
+        print(f"Movie intelligence build failed: {e}")
+    return want
+
+
 def _run_script_stage(project_dir: Path, strict: bool, director_real: bool,
                       director_model: str, manifest: dict) -> None:
     """Run the legacy script generation stage (non-editorial path)."""
@@ -478,3 +559,160 @@ def _run_script_stage(project_dir: Path, strict: bool, director_real: bool,
     manifest['script_device'] = script_device
     manifest['script_real_generation'] = script_real
     manifest['script_seconds'] = round(_time.monotonic() - t0, 2)
+
+
+def _run_grounded_director(project_dir, meta_path, movie_metadata, strict,
+                           target_sec: float = 90.0) -> dict:
+    """Run the movie-grounded Creative Director + grounded script + report.
+
+    Writes ``director_plan.json`` (grounding contract keys), ``grounded_script.json``
+    and ``reports/script_grounding_report.md``. Returns a status dict for the
+    orchestrator's manifest.
+    """
+    import time as _time
+    from director.provider_factory import get_director_config_from_env, get_llm_provider_from_config
+    from director.grounded import MovieGroundedDirector
+    from director.scene_facts import SceneFacts
+    from director.grounding_contract import (
+        build_grounding_contract,
+        save_grounding_contract,
+    )
+    from director.providers.mock_llm import GroundedMockLLM
+    from script.grounded import GroundedScriptGenerator, save_grounded_script
+    from script.grounding_report import write_script_grounding_report
+
+    status = {
+        "plan_path": None,
+        "director_provider": "grounded",
+        "director_model": None,
+        "director_device": None,
+        "director_real": False,
+        "error": None,
+    }
+    t0 = _time.monotonic()
+    project_dir = Path(project_dir)
+
+    # The grounded director reasons over the movie intelligence. Prefer the
+    # enriched movie_index.json (with story cards); fall back to scene_index.
+    import json as _json
+    movie_index_path = project_dir / "movie_index.json"
+    if movie_index_path.exists():
+        movie_index = _json.loads(movie_index_path.read_text(encoding="utf-8"))
+    else:
+        scenes_file = project_dir / "scenes" / "scene_index.json"
+        scenes = []
+        if scenes_file.exists():
+            raw = _json.loads(scenes_file.read_text(encoding="utf-8"))
+            scenes = raw.get("scenes", raw) if isinstance(raw, dict) else raw
+        if not scenes:
+            status["error"] = "no movie intelligence (movie_index or scenes) to ground concepts on"
+            return status
+        movie_index = {"movie": {"title": movie_metadata.get("title", "Untitled")},
+                       "scenes": scenes}
+
+    facts = SceneFacts.from_movie_intelligence(movie_index=movie_index)
+    if not len(facts):
+        status["error"] = "movie intelligence contained no usable scenes"
+        return status
+
+    director_config = get_director_config_from_env()
+    provider = get_llm_provider_from_config(director_config)
+    if strict:
+        from utils.strict import require_real_provider
+        provider = require_real_provider(provider, 'Grounded Director')
+    if provider is None:
+        status["error"] = "no director provider configured for grounded director"
+        return status
+
+    llm = getattr(provider, "generate_text", None)
+    if llm is None:
+        llm = GroundedMockLLM(scene_index=movie_index.get("scenes", []))
+    memory_dir = project_dir / "memory"
+    director = MovieGroundedDirector(llm=llm, memory_dir=memory_dir)
+
+    metadata = {
+        "title": movie_index.get("movie", {}).get("title") or "Untitled",
+        "duration_sec": movie_index.get("movie", {}).get("duration_sec", 0),
+        "source": movie_index.get("source_path") or movie_metadata.get("source"),
+    }
+    try:
+        result = director.develop(
+            movie_metadata=metadata,
+            scale_facts=facts,
+            num_concepts=int(os.getenv('DIRECTOR_NUM_CONCEPTS', '5')),
+            min_coverage=float(os.getenv('DIRECTOR_MIN_COVERAGE', '0.4')),
+            duration_sec=int(target_sec),
+        )
+    except Exception as e:
+        status["error"] = str(e)
+        return status
+
+    selected = result.get("selected_concept")
+    if selected is None:
+        status["error"] = "grounded director rejected every concept (no usable evidence)"
+        return status
+
+    # Write the director reasoning report + normalized grounding contract.
+    director.write_report(project_dir, result)
+    contract = build_grounding_contract(result, facts, movie_index)
+    errors = _grounding_contract_errors(contract)
+    if errors:
+        status["error"] = "grounded contract invalid: " + "; ".join(errors)
+        return status
+    save_grounding_contract(project_dir, contract)
+
+    # Build the grounded script from the contract + movie intelligence.
+    try:
+        script = GroundedScriptGenerator(target_sec=target_sec).generate(
+            contract, movie_index, project_id=str(project_dir.name))
+    except Exception as e:
+        status["error"] = f"grounded script failed: {e}"
+        return status
+    save_grounded_script(project_dir, script)
+    try:
+        write_script_grounding_report(project_dir, contract, script)
+    except Exception as e:
+        print(f"[GROUNDED] script grounding report failed: {e}")
+
+    plan = result.get("plan") or {}
+    director_plan = {
+        "thesis": contract["concept"].get("thesis", ""),
+        "hook": contract["concept"].get("hook", ""),
+        "title": contract["concept"].get("title", metadata["title"]),
+        "tone": contract.get("editorial_intent", {}).get("tone", "analytical"),
+        "structure": [
+            {"id": s.get("type"), "goal": s.get("type"),
+             "target_seconds": int(s.get("target_seconds", 10))}
+            for s in script.get("sections", [])
+        ],
+        "scenes_to_extract": [s["scene_id"] for s in contract.get("supporting_scenes", [])],
+        "creative_generation": True,
+        "grounded": True,
+        "concept": contract["concept"],
+        "production_plan": plan,
+        "evidence_strategy": plan.get("evidence_strategy", {}),
+        "editorial_intent": contract.get("editorial_intent", {}),
+        "supporting_scenes": contract.get("supporting_scenes", []),
+        "all_concepts": result.get("generated_concepts", []),
+        "director_provider": director_config.get("provider", "grounded"),
+        "director_model": director_config.get("model"),
+        "director_device": getattr(provider, "device_resolved", None) or director_config.get("device"),
+    }
+    plan_path = project_dir / "director_plan.json"
+    plan_path.write_text(
+        _json.dumps(director_plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    status.update({
+        "plan_path": plan_path,
+        "director_provider": director_config.get("provider", "grounded"),
+        "director_model": director_config.get("model"),
+        "director_device": getattr(provider, "device_resolved", None) or director_config.get("device"),
+        "director_real": llm is not None and not isinstance(llm, GroundedMockLLM),
+        "grounded_time_sec": round(_time.monotonic() - t0, 2),
+    })
+    return status
+
+
+def _grounding_contract_errors(contract: dict) -> list:
+    from director.grounding_contract import contract_is_valid
+    return contract_is_valid(contract)

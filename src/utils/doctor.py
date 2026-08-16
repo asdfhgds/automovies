@@ -59,6 +59,32 @@ def _check_import(name):
         return False
 
 
+def _check_qwen_capabilities():
+    """Detect Qwen3 (LLM) and Qwen2.5-VL / Qwen3-VL support in transformers."""
+    result = {
+        'qwen3_available': False,
+        'qwen_vl_available': False,
+        'qwen_vl_model_ids': [],
+    }
+    try:
+        import transformers as _t
+        result['transformers_version'] = _t.__version__
+        try:
+            from transformers import Qwen3ForCausalLM  # noqa: F401
+            result['qwen3_available'] = True
+        except Exception:
+            pass
+        try:
+            from transformers import Qwen2_5_VLForConditionalGeneration  # noqa: F401
+        except Exception:
+            Qwen2_5_VLForConditionalGeneration = None
+        if Qwen2_5_VLForConditionalGeneration is not None:
+            result['qwen_vl_available'] = True
+    except Exception:
+        pass
+    return result
+
+
 def _detect_profile():
     """Detect active profile based on environment."""
     profile = os.environ.get('STUDIO_PROFILE', 'local').lower()
@@ -138,6 +164,7 @@ def run_checks():
     out['pyscenedetect'] = _check_import('scenedetect') or _check_import('pyscenedetect')
     out['transformers'] = _check_import('transformers')
     out['accelerate'] = _check_import('accelerate')
+    out['qwen'] = _check_qwen_capabilities()
     # nvidia-smi availability
     out['nvidia_smi'] = shutil.which('nvidia-smi') is not None
 
@@ -244,6 +271,9 @@ def print_report(report=None):
     print(f"WhisperX: {'[OK] FOUND' if report.get('whisperx') else '[MISSING]'}")
     print(f"Whisper (OpenAI): {'[OK] FOUND' if report.get('whisper') else '[MISSING]'}")
     print(f"PySceneDetect: {'[OK] FOUND' if report.get('pyscenedetect') else '[MISSING]'}")
+    q = report.get('qwen', {})
+    print(f"Qwen3 (LLM): {'[OK] Qwen3ForCausalLM available' if q.get('qwen3_available') else '[MISSING]'}")
+    print(f"Qwen2.5/3-VL (Vision): {'[OK] Qwen2_5_VLForConditionalGeneration available' if q.get('qwen_vl_available') else '[MISSING]'}")
     
     print('\n' + '-'*60)
     print('ACTIVE PROFILE & PROVIDERS')
