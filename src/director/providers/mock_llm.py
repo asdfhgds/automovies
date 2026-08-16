@@ -4,6 +4,39 @@ from typing import Dict, Any, List
 from .base import LLMProvider
 
 
+def _mock_evidence(scene_index: List[Dict[str, Any]]) -> List[str]:
+    """Derive grounded required_evidence from the actual scene index.
+
+    The milestone director rejects any concept whose ``required_evidence`` is
+    empty or un-matchable (nothing invented). The mock reads real scene facts
+    (objects/locations/dialogue) so its concepts can pass the evidence gate.
+    """
+    claims: List[str] = []
+
+    def _add(text: str):
+        text = (text or "").strip()
+        if text and text not in claims:
+            claims.append(text)
+
+    for scene in scene_index or []:
+        story = scene.get("story") or {}
+        for obj in (story.get("objects") or [])[:1]:
+            _add(f"the {obj} is visible on screen")
+        for loc in ([story.get("location")] if story.get("location") else [])[:1]:
+            _add(f"the scene takes place in {loc}")
+        for line in (story.get("dialogue") or [])[:1]:
+            if isinstance(line, dict):
+                _add((line.get("text") or "").strip())
+            elif line:
+                _add(str(line))
+        for act in (story.get("actions") or [])[:1]:
+            _add(f"a character is {act}")
+
+    if not claims:
+        claims = ["on-screen dialogue between characters"]
+    return claims[:5]
+
+
 class MockLLMProvider(LLMProvider):
     """Mock provider that returns deterministic creative concepts for testing."""
 
@@ -28,6 +61,8 @@ class MockLLMProvider(LLMProvider):
             "hook": f"What if {movie_title} is actually exploring a deeper philosophical truth?",
             "thesis": f"{movie_title} uses its narrative structure to explore themes of fate, choice, and moral ambiguity through the tension between determinism and free will.",
             "why_interesting": "Examines how visual language and dialogue reinforce philosophical ideas without stating them explicitly.",
+            "required_evidence": _mock_evidence(scene_index),
+            "visual_opportunity": "Track how cinematography emphasizes character agency or constraint. Use close-ups during moral choices, wide shots during consequences.",
             "supporting_scene_types": ["dialogue", "decision", "consequence", "revelation"],
             "tone": "analytical_philosophical",
             "visual_strategy": "Track how cinematography emphasizes character agency or constraint. Use close-ups during moral choices, wide shots during consequences.",
@@ -41,6 +76,8 @@ class MockLLMProvider(LLMProvider):
                 "hook": "Every character builds worlds in their mind before acting. Let's decode the architecture of their choices.",
                 "thesis": f"{movie_title} reveals how characters construct meaning from chaos, using symbolic objects and recurring patterns to impose order on their circumstances.",
                 "why_interesting": "Explores the psychological defense mechanisms characters employ, making abstract psychology visually concrete.",
+                "required_evidence": _mock_evidence(scene_index),
+                "visual_opportunity": "Use object tracking and spatial composition to show emotional states. Repeat visual motifs when characters revisit their internal conflicts.",
                 "supporting_scene_types": ["character_alone", "symbolic_moment", "conflict", "resolution"],
                 "tone": "psychological_intimate",
                 "visual_strategy": "Use object tracking and spatial composition to show emotional states. Repeat visual motifs when characters revisit their internal conflicts.",
@@ -53,6 +90,8 @@ class MockLLMProvider(LLMProvider):
             "hook": "Is the film asking us to judge, or to feel the weight of impossible choices ourselves?",
             "thesis": f"{movie_title} positions the viewer as both witness and participant, blurring moral judgment through perspective and withholding information that would allow certainty.",
             "why_interesting": "Examines the film's grammar of storytelling—what it shows, hides, and forces us to infer—as the engine of moral complexity.",
+            "required_evidence": _mock_evidence(scene_index),
+            "visual_opportunity": "Highlight editing choices and camera positioning that create identification with different characters. Show how perspective shift changes moral weight.",
             "supporting_scene_types": ["ambiguous_moment", "point_of_view_shift", "information_reveal", "final_judgment"],
             "tone": "metanarrative_interrogative",
             "visual_strategy": "Highlight editing choices and camera positioning that create identification with different characters. Show how perspective shift changes moral weight.",

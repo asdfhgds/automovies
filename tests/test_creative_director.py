@@ -123,6 +123,8 @@ class TestMockLLMProvider:
         assert len(concepts) == 2
         assert all("title" in c for c in concepts)
         assert all("thesis" in c for c in concepts)
+        assert all(c["required_evidence"] for c in concepts)
+        assert all(c.get("visual_opportunity") for c in concepts)
 
     def test_generate_production_plan(self):
         """Test production plan generation."""

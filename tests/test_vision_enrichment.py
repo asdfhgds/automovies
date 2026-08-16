@@ -165,6 +165,46 @@ def test_extract_json_dict_garbage():
     assert _extract_json_dict("no json here") is None
 
 
+def test_extract_json_dict_salvages_truncated_array():
+    out = ('```json\n{"location": "small shop or garage", '
+           '"actions": ["standing still", "looking left"], '
+           '"objects": ["man in plaid", "tools')
+    parsed = _extract_json_dict(out)
+    assert parsed is not None
+    assert parsed["location"] == "small shop or garage"
+    assert parsed["actions"] == ["standing still", "looking left"]
+    assert parsed["objects"] == ["man in plaid", "tools"]
+
+
+def test_extract_json_dict_salvages_truncated_string_value():
+    parsed = _extract_json_dict('{"location": "a test plac')
+    assert parsed == {"location": "a test plac"}
+
+
+def test_extract_json_dict_truncated_prose_still_none():
+    assert _extract_json_dict("the man walks over to the counter and picks") is None
+
+
+def test_enricher_default_max_new_tokens_is_1024():
+    import inspect
+    from movie_understanding.vision_enricher import Qwen3VLEnricher
+    sig = inspect.signature(Qwen3VLEnricher.__init__)
+    assert sig.parameters["max_new_tokens"].default == 1024
+
+
+def test_enricher_retries_truncated_response_before_failing():
+    en = _FakeVL(answer="ignored")
+    answers = iter(["not json at all", '{"location": "ok", "actions": ["go"]}'])
+
+    def fake_generate(image_paths, prompt):
+        return next(answers)
+
+    en._generate = fake_generate
+    result = en.enrich(_scene_with_keyframes(), [])
+    assert result["analysis"]["visual"]["location"] == "ok"
+    assert result["analysis"]["visual"]["actions"] == ["go"]
+
+
 # ---------------------------------------------------------------------------
 # Qwen3-VL enricher (no real model — monkeypatch model I/O)
 # ---------------------------------------------------------------------------
@@ -631,6 +671,32 @@ def test_movie_analyzer_attach_keyframes_provenance(tmp_path, monkeypatch):
     monkeypatch.setenv("VISION_ENRICHER", "heuristic")
     idx = MovieAnalyzer(attach_keyframes=True).analyze(tmp_path)
     assert idx["provenance"]["keyframes"] is True
+
+
+def test_movie_analyzer_releases_vision_model_after_analyze(tmp_path, monkeypatch):
+    """The VL model must hand VRAM back after analyze (OOM guard)."""
+    monkeypatch.setenv("VISION_ENRICHER", "heuristic")
+    (tmp_path / "scenes").mkdir(parents=True)
+    (tmp_path / "transcripts").mkdir()
+    scenes = _scenes()
+    for s in scenes:
+        s["shot_ids"] = [s["scene_id"]]
+        s["shots"] = [dict(start_sec=s["start_sec"], end_sec=s["end_sec"],
+                           shot_id=s["scene_id"])]
+    (tmp_path / "scenes" / "scene_index.json").write_text(
+        json.dumps(scenes), encoding="utf-8")
+    (tmp_path / "transcripts" / "transcript.json").write_text(
+        json.dumps({"segments": []}), encoding="utf-8")
+    (tmp_path / "project_meta.json").write_text(
+        json.dumps({"project_id": "p1", "title": "T", "source_path": "x.mp4"}),
+        encoding="utf-8")
+
+    en = _FakeVL()
+    MovieAnalyzer(scene_enricher=en, attach_keyframes=False).analyze(tmp_path)
+    # enrich() initialized the (fake) model; analyze must release it after.
+    assert en.model is None
+    assert en.processor is None
+    assert en._initialized is False
 
 
 # ---------------------------------------------------------------------------

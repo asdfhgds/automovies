@@ -172,6 +172,85 @@ def _extract_json_dict(text: str) -> Optional[dict]:
                     return parsed
             except json.JSONDecodeError:
                 continue
+    return _salvage_truncated_dict(text)
+
+
+def _salvage_truncated_dict(text: str) -> Optional[dict]:
+    """Parse a response that was *truncated* in the middle of a JSON object.
+
+    Generation with a too-small ``max_new_tokens`` budget can cut a scene
+    card off mid-array (e.g. ``"objects": ["man ...", "tools``). Instead of
+    failing the whole run, close the unclosed brackets (and close/trim a
+    trailing half-written string) so the recovered partial fields still parse.
+    """
+    if not text:
+        return None
+    fenced = re.search(r"```(?:json)?\s*([^`]*)", text, re.DOTALL)
+    body = (fenced.group(1) if fenced else text).strip()
+    if not body:
+        return None
+    start = body.find("{")
+    if start < 0:
+        return None
+    raw = body[start:]
+
+    stack = []
+    in_str = False
+    esc = False
+    for ch in raw:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch in "[{":
+                stack.append(ch)
+            elif ch in "]}":
+                if stack:
+                    stack.pop()
+
+    if not stack:
+        return None
+    closing = {"{": "}", "[": "]"}
+    fix = "".join(closing[c] for c in reversed(stack))
+
+    def _try(s: str) -> Optional[dict]:
+        fixed = _repair_json(s)
+        if not fixed:
+            return None
+        try:
+            parsed = json.loads(fixed)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    # Strategy 1: close the trailing half-written string, then the brackets.
+    if in_str:
+        parsed = _try(raw + '"' + fix)
+        if parsed:
+            return parsed
+    # Strategy 2: drop the trailing, incomplete string value/key entirely.
+    if in_str:
+        m = list(re.finditer(r'"[^"]*$', raw))
+        if m:
+            cut = raw[: m[-1].start()]
+            parsed = _try(cut + "}" * stack.count("{"))
+            if parsed:
+                return parsed
+        cut = re.sub(r',\s*"[^"]*$', "", raw)
+        if cut != raw:
+            parsed = _try(cut + fix)
+            if parsed:
+                return parsed
+    # Strategy 3: close brackets directly over the truncated tail.
+    parsed = _try(raw + fix)
+    if parsed:
+        return parsed
     return None
 
 
@@ -186,7 +265,7 @@ class Qwen3VLEnricher(SceneEnricher):
         device: str = "auto",
         dtype: str = "auto",
         temperature: float = 0.2,
-        max_new_tokens: int = 512,
+        max_new_tokens: int = 1024,
         max_frames: int = 1,
         strict: bool = False,
     ):
@@ -252,6 +331,32 @@ class Qwen3VLEnricher(SceneEnricher):
         global _MODEL_CACHE
         _MODEL_CACHE = {}
         try:
+            import gc
+            gc.collect()
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+    def release(self) -> None:
+        """Drop this instance's model/processor references and free GPU memory.
+
+        The vision model rides a class-level cache that survives one ``analyze``
+        call, so after enrichment finishes the model stays resident and a later
+        stage (director Qwen LLM, TTS) can OOM a 16GB T4. Call ``release()``
+        once the scene enrichment stage is done to hand VRAM back to the next
+        stage. Idempotent.
+        """
+        global _MODEL_CACHE
+        self._initialized = False
+        self.model = None
+        self.processor = None
+        self._device_resolved = None
+        _MODEL_CACHE = {} if self.model_name else _MODEL_CACHE
+        try:
+            import gc
+            gc.collect()
             import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -605,16 +710,28 @@ Answer now:"""
         ) or (scene.get("transcript") or "")
 
         prompt = self._build_prompt(scene, transcript_text)
-        try:
-            output = self._generate(keyframes[: self.max_frames], prompt)
-        except Exception as e:
-            raise RuntimeError(f"Scene {scene_id} vision generation failed: {e}")
+        parsed = None
+        output = None
+        for attempt in range(1, 3):
+            try:
+                output = self._generate(keyframes[: self.max_frames], prompt)
+            except Exception as e:
+                raise RuntimeError(f"Scene {scene_id} vision generation failed: {e}")
 
-        self.last_raw_output = output
-        parsed = _extract_json_dict(output)
+            self.last_raw_output = output
+            parsed = _extract_json_dict(output)
+            if parsed:
+                break
+            logger.warning(
+                f"Scene {scene_id}: vision response on attempt {attempt} was invalid/"
+                f"truncated JSON (budget={self.max_new_tokens}); retrying with more tokens"
+            )
+            self.max_new_tokens = max(self.max_new_tokens, 1024) * 2
+
         if not parsed:
             raise RuntimeError(
-                f"Scene {scene_id} vision response was not valid JSON: {output[:200]}"
+                f"Scene {scene_id} vision response was not valid JSON after retries: "
+                f"{(output or '')[:200]}"
             )
 
         from movie_understanding.scene_analyzer import merge_story

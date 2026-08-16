@@ -154,6 +154,11 @@ class MovieAnalyzer:
         movie_memory.save_movie_index(project_dir, movie_index)
         movie_memory.save_semantic_index(project_dir, semantic.to_dict())
         _write_artifacts(project_dir, movie_index)
+
+        # Hand VRAM back to the next stage (director LLM, TTS, editorial). The
+        # vision model rides a class-level cache that otherwise stays resident
+        # and OOMs a 16GB T4 when a later stage loads its own model.
+        _release_enricher(self.scene_enricher)
         return movie_index
 
 
@@ -198,6 +203,16 @@ def _collect_shots(scenes: List[dict]) -> List[dict]:
 
 def _has_word_timestamps(segments: List[dict]) -> bool:
     return any(seg.get("words") for seg in (segments or []))
+
+
+def _release_enricher(enricher: Optional[SceneEnricher]) -> None:
+    """Release GPU memory held by a scene enricher, if it supports it."""
+    release = getattr(enricher, "release", None)
+    if callable(release):
+        try:
+            release()
+        except Exception:
+            pass
 
 
 def build_movie_index(project_dir: Path, scene_enricher: Optional[SceneEnricher] = None,

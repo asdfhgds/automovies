@@ -152,6 +152,10 @@ class MovieGroundedDirector:
         )
         return write_report(Path(project_dir), text)
 
+    def write_report(self, project_dir: Path, result: Dict[str, Any]) -> Path:
+        """Public alias of :meth:`write_reasoning_report`."""
+        return self.write_reasoning_report(project_dir, result)
+
     # -- Internals -----------------------------------------------------------
 
     def _generate(

@@ -423,6 +423,30 @@ class TestMovieGroundedDirector:
         assert res["plan"] is None
         assert res["rejected_concepts"] == []
 
+    def test_write_report_writes_director_reasoning_md(self, facts, metadata, tmp_path):
+        """The public write_report alias produces reports/director_reasoning.md."""
+        mock = MockLLM(
+            concepts=[{
+                "title": "Real One", "hook": "h", "thesis": "a specific grounded "
+                "claim about the saloon", "why_interesting": "w",
+                "required_evidence": ["revolver"],
+                "visual_opportunity": "close-up", "format": "f",
+            }],
+            plan={
+                "concept": {"title": "Real One", "hook": "h", "thesis": "s"},
+                "format": {"type": "short_video_essay", "duration_sec": 90},
+                "editorial_direction": {"pacing": "p", "visual_style": "v",
+                                        "audio_style": "a", "editing_style": "e"},
+            },
+        )
+        director = MovieGroundedDirector(mock, memory_dir=tmp_path / "mem")
+        res = director.develop(metadata, facts, num_concepts=1, min_coverage=0.4)
+        path = director.write_report(tmp_path, res)
+        assert path.name == "director_reasoning.md"
+        text = path.read_text(encoding="utf-8")
+        assert "Director Reasoning Report" in text
+        assert "Real One" in text
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
