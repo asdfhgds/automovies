@@ -395,9 +395,22 @@ class Qwen3VLEnricher(SceneEnricher):
                 return
 
             logger.info(f"Loading vision model {self.model_name}...")
-            self.processor = AutoProcessor.from_pretrained(
-                self.model_name, trust_remote_code=True
-            )
+            # transformers >= 4.5x defaults to the FAST image processor for
+            # Qwen2.5-VL, which is a "breaking change": with eager attention on a
+            # T4 it misaligns image-grid tokens and the model degenerates into
+            # repeated punctuation ("!!!!...") because the image is effectively
+            # not attached. use_fast=False restores the legacy slow processor
+            # that this pipeline was validated against.
+            use_fast = os.environ.get("VISION_USE_FAST", "").lower() in ("1", "true", "yes")
+            try:
+                self.processor = AutoProcessor.from_pretrained(
+                    self.model_name, trust_remote_code=True, use_fast=use_fast
+                )
+            except TypeError:
+                # Very old transformers: use_fast not accepted.
+                self.processor = AutoProcessor.from_pretrained(
+                    self.model_name, trust_remote_code=True
+                )
             quantize_4bit = str(self.dtype).lower() in ("4bit", "int4", "nf4")
             torch_dtype = (
                 torch.float16 if not quantize_4bit and device == "cuda" else torch.float32
