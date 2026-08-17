@@ -30,7 +30,9 @@ except Exception:
 PY
 then
   echo "   Qwen2_5_VLForConditionalGeneration missing -> upgrading transformers"
-  python -m pip install -q -U "transformers>=4.57" accelerate sentencepiece protobuf
+  # Stay below 5.x: transformers 5 made Qwen2.5-VL fp16 sampling produce NaN
+  # logits on T4 (device-side multinomial assert). The 4.x line is validated.
+  python -m pip install -q -U "transformers>=4.57,<5" accelerate sentencepiece protobuf
   python - <<'PY'
 from transformers import Qwen2_5_VLForConditionalGeneration  # noqa: F401
 import transformers

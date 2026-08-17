@@ -591,13 +591,27 @@ Answer now:"""
             inputs = {k: v.to(self._device_resolved) for k, v in inputs.items() if hasattr(v, "to")}
 
         with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=self.max_new_tokens,
-                temperature=self.temperature,
-                do_sample=self.temperature > 0.0,
-                top_p=0.95,
-            )
+            # Sampling (multinomial) on fp16 logits is what triggers the
+            # "probability tensor contains either inf, nan or element < 0"
+            # device-side assert on a T4 with an offloaded (mixed CPU/GPU)
+            # Qwen2.5-VL. Greedy decoding never touches multinomial, so default
+            # to it; VISION_SAMPLE=1 re-enables stochastic sampling where the
+            # installed transformers/torch reliably support fp16 sampling.
+            sample = os.environ.get("VISION_SAMPLE", "").lower() in ("1", "true", "yes")
+            if sample:
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    temperature=self.temperature,
+                    do_sample=self.temperature > 0.0,
+                    top_p=0.95,
+                )
+            else:
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                )
 
         generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
         decode = getattr(self.processor, "batch_decode", None) or getattr(
