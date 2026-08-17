@@ -360,18 +360,26 @@ notebook. Allow up to 2h for a full-length movie (transcription + full-frame sce
 detection + Qwen3-VL enrichment + grounded director + script + TTS + render)."""))
 
 cells.append(code("""# @title 8) run grounded pipeline (real LLM + real vision + real TTS + render)
-import subprocess, time
+import subprocess, time, sys
 
 PROJECT_ID = open("/content/project_id.txt").read().strip()
 t0 = time.time()
 out = subprocess.run(
     ["python", "src/main.py", "run", "--project-id", PROJECT_ID, "--profile", "colab-gpu"],
-    timeout=10800)
+    timeout=10800, text=True, capture_output=True)
 dt = time.time() - t0
+full = (out.stdout or "") + (out.stderr or "")
+# Persist the FULL pipeline log so a failure can be debugged even after the
+# notebook scrolls past it / on the next run.
+with open("/content/pipeline.log", "w") as f:
+    f.write(full)
+    f.write(f"\\n--- pipeline wall time: {dt:.1f}s (exit code {out.returncode}) ---\\n")
+sys.stdout.write(full[-12000:] if len(full) > 12000 else full)
 print(f"--- pipeline wall time: {dt:.1f}s ---")
 print("(exit code)", out.returncode)
 if out.returncode != 0:
-    raise RuntimeError("VALIDATION FAILED: pipeline failed (see logs above).")
+    print("FULL LOG saved to /content/pipeline.log")
+    raise RuntimeError("VALIDATION FAILED: pipeline failed (see logs above; full log: /content/pipeline.log).")
 open("/content/pipeline_wall_sec.txt", "w").write(f"{dt:.1f}")
 """))
 
