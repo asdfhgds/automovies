@@ -60,7 +60,14 @@ def run_qc(project_dir: Path):
     # check director plan
     checks['director_plan'] = (project_dir / 'director_plan.json').exists()
     checks['script'] = (project_dir / 'script.json').exists()
-    checks['scene_cards'] = (project_dir / 'scenes' / 'scene_cards.json').exists()
+    # Grounded/editorial runs produce PySceneDetect's scene_index.json and the
+    # enriched movie_index.json; the legacy mock path wrote scene_cards.json.
+    # Any real scene index is sufficient for QC.
+    checks['scene_cards'] = any(p.exists() for p in (
+        project_dir / 'scenes' / 'scene_cards.json',
+        project_dir / 'scenes' / 'scene_index.json',
+        project_dir / 'movie_index.json',
+    ))
     checks['assets'] = any((project_dir / 'assets').glob('*')) if (project_dir / 'assets').exists() else False
     checks['render'] = (project_dir / 'renders' / 'final_render.mp4').exists()
 
