@@ -182,6 +182,12 @@ os.environ["DIRECTOR_DEVICE"] = "cuda"
 os.environ["VISION_ENRICHER"] = "qwen3vl"
 os.environ["VISION_MODEL"] = "Qwen/Qwen2.5-VL-7B-Instruct"  # Qwen3-VL / Qwen2.5-VL real vision
 os.environ["VISION_DEVICE"] = "cuda"
+# 4-bit NF4 quantization: Qwen2.5-VL-7B in fp16 (~14GB) does not fit a 14GB T4,
+# so device_map="auto" offloads the vision tower to CPU and the model stops
+# seeing keyframes (degenerates into "!!!!..."). 4-bit keeps the whole model on
+# the GPU and is the config this pipeline validates on. float16 also works on a
+# 16GB+ card; VISION_DTYPE=auto keeps the model's default dtype.
+os.environ["VISION_DTYPE"] = "4bit"
 os.environ["TTS_PROVIDER"] = "kokoro"   # kokoro | chatterbox | qwen3_tts
 os.environ["TTS_DEVICE"] = "cuda"
 os.environ["TTS_VOICE"] = "am_adam"
