@@ -76,6 +76,13 @@ class MovieGroundedDirector:
         self.context_builder = DirectorContextBuilder(
             max_tokens=context_tokens, reserve_for_output=reserve_for_output
         )
+        # Honest run bookkeeping for validation reports (llm call counts,
+        # regeneration rounds) — never fabricated, only incremented here.
+        self.stats = {
+            "llm_calls": 0,
+            "regeneration_rounds": 0,
+            "substitutes_generated": 0,
+        }
 
     # -- Public API ---------------------------------------------------------
 
@@ -133,6 +140,7 @@ class MovieGroundedDirector:
             "selected_concept_index": selected_index,
             "plan": plan,
             "diversity_metric": diversity,
+            "llm_stats": dict(self.stats),
             "_scene_facts": scale_facts,
         }
         return result
@@ -167,11 +175,16 @@ class MovieGroundedDirector:
         else:
             prompt = build_generation_prompt(context, num_concepts)
         raw = self.llm(prompt)
+        self.stats["llm_calls"] += 1
         concepts = parse_concepts(raw)
         if not concepts:
             logger.warning("Model returned no parseable concepts; retrying once.")
             raw = self.llm(build_generation_prompt(context, num_concepts))
+            self.stats["llm_calls"] += 1
             concepts = parse_concepts(raw)
+        if reject_previous:
+            self.stats["regeneration_rounds"] += 1
+            self.stats["substitutes_generated"] += len(concepts)
         return concepts
 
     def _evidence_gate(
@@ -250,6 +263,7 @@ class MovieGroundedDirector:
         )
         prompt = build_plan_prompt(plan_ctx, duration_sec=duration_sec)
         plan = parse_plan(self.llm(prompt)) or {}
+        self.stats["llm_calls"] += 1
         plan.setdefault("concept", {})
         plan.setdefault("format", {"type": "short_video_essay",
                                    "duration_sec": duration_sec})

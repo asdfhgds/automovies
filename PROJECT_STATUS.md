@@ -1,14 +1,16 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: Movie-grounded Creative Director milestone **built and unit-tested**
-(real-Qwen clip validation pending execution). The Director now reads the existing
+**Last Updated**: Movie-grounded Creative Director milestone **built and unit-tested**;
+validation harness **instrumented** to record honest runtime/GPU/regeneration
+measurements; real-Qwen clip validation **pending execution on a Colab T4** (this
+machine has no CUDA). The Director now reads the existing
 Movie Intelligence (`movie_index.json` → `SceneFacts`), builds a compact
 fact-grounded context, asks real Qwen for 5 diverse concepts, **rejects** any
 concept whose `required_evidence` is not actually present in the scenes, selects
 the strongest grounded concept, and emits a scene-aware director plan
 (`reports/director_reasoning.md`). Evidence verifier, new retrieval system, and
-script wiring are intentionally **not** implemented. 221 fast tests pass (21 new
-grounded-director tests).
+script wiring are intentionally **not** implemented. 272 fast tests pass (23 new
+grounded-director tests, incl. 2 run-bookkeeping).
 
 Prior milestone (kept): Movie Intelligence validation **executed on a real movie**
 + **dense-embedding retrieval layer added and measured**. The real run
@@ -618,6 +620,22 @@ actually present in the movie.
   redesign, generative video/image, and YouTube automation are intentionally NOT
   implemented (§15).
 
+### Validation harness (honest runtime recording)
+- `MovieGroundedDirector` now exposes `result["llm_stats"]` — `llm_calls`,
+  `regeneration_rounds`, `substitutes_generated` — counted at each real LLM
+  call (never fabricated).
+- `scripts/run_director_validation.py` writes a `runtime` block into
+  `reports/director_validation.json`: GPU name / total VRAM / peak allocated
+  (from torch; `"cuda unavailable"` when absent), model, device, dtype, model
+  load time, per-call generation times, total generation time, LLM calls,
+  regeneration rounds, substitutes generated, wall clock.
+- `notebooks/colab_grounded_director_validation.ipynb` — dedicated real-Qwen
+  validation on the existing `bc6384be-...` movie (GPU check → clone+deps →
+  Drive mount → strict run → show outputs).
+- `reports/director_validation.md` / `.json` (repo root) — blank human-eval
+  scaffold (specificity / grounding / originality / visual_potential /
+  generic_ai_feeling / human_notes) to be filled ONLY after the real run.
+
 ### Files added
 - `src/director/scene_facts.py` — normalizer + fact access + hallucination guard.
 - `src/director/context_builder.py` — compact, token-limited director context.
@@ -626,15 +644,24 @@ actually present in the movie.
 - `src/director/concepts.py` — prompt builders + tolerant JSON parsing for the
   concept / plan / rejection / diversity schemas.
 - `src/director/report.py` — renders `reports/director_reasoning.md`.
-- `src/director/grounded.py` — `MovieGroundedDirector` orchestration.
+- `src/director/grounded.py` — `MovieGroundedDirector` orchestration (+
+  `result["llm_stats"]` run bookkeeping: llm_calls / regeneration_rounds /
+  substitutes_generated).
 - `scripts/run_director_validation.py` — gated real-Qwen Colab validation
-  (5 concepts → select → plan → `director_reasoning.md`).
-- `tests/test_grounded_director.py` (21 tests: context builder, truncation,
+  (5 concepts → select → plan → `director_reasoning.md`); now also records the
+  `runtime` block (GPU/VRAM, model load time, per-call generation times, call
+  counts, wall clock) into `reports/director_validation.json`.
+- `tests/test_grounded_director.py` (23 tests: context builder, truncation,
   hallucination guard, evidence availability, diversity, rejection, memory,
-  plan schema).
+  plan schema, run bookkeeping).
 - `tests/test_grounded_director_real_qwen.py` — gated (`llm_integration`).
 - `notebooks/colab_vision_gpu.ipynb` — added Cell 7d (grounded director); retitled
   Cell 7b doc to make `embedding` the default and flipped `METHOD="embedding"`.
+- `notebooks/colab_grounded_director_validation.ipynb` — dedicated real-Qwen
+  director validation on the existing `bc6384be-...` movie (GPU check →
+  clone+deps → Drive mount → strict run → show outputs).
+- `reports/director_validation.md` / `.json` (repo root) — blank human-eval
+  scaffold for the post-run evaluation (never fabricated).
 
 ### Context size / model / evidence record
 - Context builder caps at `max_tokens` minus `reserve_for_output` (default
@@ -644,7 +671,7 @@ actually present in the movie.
   evidence coverage, failures, known hallucination cases, next bottleneck) are to
   be recorded in `reports/director_validation.json` by
   `scripts/run_director_validation.py` when executed on the validated movie
-  (`bc6384be-...`).
+  (`bc6384be-...`). The `runtime` block is already recorded automatically.
 
 ## Files Changed This Session (Real Qwen GPU Validation)
 
@@ -823,9 +850,11 @@ actually present in the movie.
   - `src/director/concepts.py` — prompt builders (generation / rejection /
     plan), tolerant JSON parsing, diversity metric, generic-thesis detection.
   - `src/director/report.py` — `reports/director_reasoning.md` renderer.
-  - `src/director/grounded.py` — `MovieGroundedDirector` orchestration.
-  - `scripts/run_director_validation.py` — gated real-Qwen Colab validation.
-  - `tests/test_grounded_director.py` (21 tests) and
+  - `src/director/grounded.py` — `MovieGroundedDirector` orchestration (+
+    `result["llm_stats"]` run bookkeeping).
+  - `scripts/run_director_validation.py` — gated real-Qwen Colab validation;
+    records the `runtime` block (GPU/VRAM, timings, call counts, wall clock).
+  - `tests/test_grounded_director.py` (23 tests) and
     `tests/test_grounded_director_real_qwen.py` (gated `llm_integration`).
 - **Modified**:
   - `src/director/__init__.py` — export the new director modules.
@@ -833,11 +862,15 @@ actually present in the movie.
     default `METHOD="embedding"` + doc.
   - Documentation: `PROJECT_STATUS.md`, `DEVELOPMENT_ROADMAP.md`,
     `NEXT_MILESTONE.md`.
+- **Created (validation harness)**:
+  - `notebooks/colab_grounded_director_validation.ipynb` — dedicated real-Qwen
+    director validation on `bc6384be-...`.
+  - `reports/director_validation.md` / `.json` — blank human-eval scaffold.
 
 ## Test Results
 
 ```
-221 fast tests ............................ PASS (incl. 21 new grounded-director tests)
+272 fast tests ............................ PASS (incl. 23 new grounded-director tests, 2 run-bookkeeping)
 ```
   - 26 Qwen provider tests (incl. placeholder-guard + plain-text fallback)
   - 10 Creative director tests
@@ -895,7 +928,8 @@ TOTAL: 191 passing, 0 failures
 ✅ **Movie-grounded Creative Director**: reads the existing Movie Intelligence,
    generates 5 diverse concepts with `required_evidence`, rejects unsupported /
    generic ideas, selects the strongest grounded concept, emits a scene-aware
-   plan + `director_reasoning.md`. 221 fast tests pass. Real-Qwen clip
+   plan + `director_reasoning.md`. 272 fast tests pass (23 new grounded-director
+   tests). Real-Qwen clip
    validation (Colab) is gated/pending execution.
 ⏳ **Real-Movie + Real-TTS GPU run**: notebook `colab_real_movie_tts.ipynb` ready;
    needs a user-supplied legally-owned movie to execute on a T4/A100

@@ -1,7 +1,8 @@
 # NEXT MILESTONE
 
 **Last Updated**: Movie-grounded Creative Director milestone **built and
-unit-tested; real-Qwen clip validation gated/pending**.
+unit-tested; validation harness instrumented; real-Qwen run pending human
+execution on a Colab T4**.
 
 What this milestone does (see `PROJECT_STATUS.md` for details): the Director now
 reads the existing Movie Intelligence (`movie_index.json` → `SceneFacts`), builds
@@ -16,7 +17,17 @@ inspectable `reports/director_reasoning.md`.
 retrieval model, TTS replacement, subtitle redesign, generative video/image,
 YouTube automation, and **script wiring** — the pipeline stops at the selected
 concept + director plan so the Director can be validated on its own.
-**221 fast tests pass** (21 new grounded-director tests).
+**272 fast tests pass** (23 new grounded-director tests).
+
+**Validation harness (this session)**: `scripts/run_director_validation.py` now
+records honest runtime measurements (GPU/VRAM via torch, model load time,
+per-call generation times, LLM call counts, regeneration rounds, substitutes
+generated, wall clock) into `reports/director_validation.json`;
+`MovieGroundedDirector` exposes `result["llm_stats"]`; a dedicated notebook
+`notebooks/colab_grounded_director_validation.ipynb` runs the real-Qwen
+validation on the existing `bc6384be-...` movie; a blank human-eval scaffold
+lives at `reports/director_validation.md` / `.json` (to be filled only after the
+real run — never fabricated).
 
 Prior milestone (kept): Movie Intelligence validation **completed on a real
 movie**. `notebooks/colab_vision_gpu.ipynb` ran end-to-end on a Colab T4 with
@@ -87,7 +98,7 @@ retrieval human-verdict record is tracked in `reports/`.
     `reports/director_reasoning.md`. Hallucination-safe (unknown characters
     marked `unknown_character_01 (low confidence)`; vocab limited to facts that
     exist). Stops at the plan — NOT wired to the script stage.
-- Local E2E: **221 fast tests pass** (vision, artifacts, retrieval, editorial,
+- Local E2E: **272 fast tests pass** (vision, artifacts, retrieval, editorial,
     movie-understanding, semantic-embedding, grounded-director suites).
   - **Real-movie run executed (Colab T4)**: project `5398e39c-d35b-481a-b580-
     42d7224732eb` — `Qwen/Qwen2.5-VL-3B-Instruct` (bf16), 120.078s window
@@ -156,7 +167,7 @@ retrieval human-verdict record is tracked in `reports/`.
 
 - **CURRENT BOTTLENECK**: **validating the Movie-grounded Creative Director on the
   real movie with real Qwen.** The infrastructure is built and unit-tested
-  (221 fast tests). The unproven link is that real Qwen produces 5 genuinely
+  (272 fast tests). The unproven link is that real Qwen produces 5 genuinely
   different, grounded, non-generic concepts on the real `bc6384be` intelligence,
   and that the evidence gate rejects only the right things. Secondary bottleneck
   (prior milestone, kept): retrieval *semantics* — TF-IDF scored 1/8 GOOD and
@@ -164,13 +175,16 @@ retrieval human-verdict record is tracked in `reports/`.
 
 - **NEXT ACTION** (validate the grounded director, then wire it to the script)
   1. **Execute the real-Qwen grounded-director run** on the validated movie:
-     `python scripts/run_director_validation.py --project data/bc6384be-...` on
-     a Colab T4 (or Notebook Cell 7d). Inspect `reports/director_reasoning.md`:
-     are the 5 concepts specific, non-generic, grounded in actual scenes, and
-     meaningfully different (diversity metric)? Which concepts were rejected and
-     why? Fill/record the per-milestone fields (§16): context size, model,
+     `notebooks/colab_grounded_director_validation.ipynb` (dedicated; recommended)
+     or `python scripts/run_director_validation.py --project data/bc6384be-...`
+     on a Colab T4 (or Notebook Cell 7d). Inspect `reports/director_reasoning.md`
+     and `reports/director_validation.json` (which now includes the `runtime`
+     block): are the 5 concepts specific, non-generic, grounded in actual scenes,
+     and meaningfully different (diversity metric)? Which concepts were rejected
+     and why? Fill/record the per-milestone fields (§16): context size, model,
      concepts generated, selected concept, evidence coverage, failures, known
-     hallucination cases, next bottleneck.
+     hallucination cases, next bottleneck. Then fill the human-eval fields in
+     `reports/director_validation.md` / `.json`.
   2. **Iterate on grounding quality** if the real run under-delivers: relax/refine
      `required_evidence` matching (stemming / synonym-aware lexical matching, not a
      new retrieval system), or improve the compact context so Qwen cites real scenes.

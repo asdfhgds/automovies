@@ -448,5 +448,63 @@ class TestMovieGroundedDirector:
         assert "Real One" in text
 
 
+# --------------------------------------------------------------------------- #
+# Run bookkeeping (validation-report counters)
+# --------------------------------------------------------------------------- #
+
+class TestRunBookkeeping:
+    def test_llm_stats_count_initial_and_plan_calls(self, facts, metadata, tmp_path):
+        """A clean run is exactly 2 LLM calls: brainstorm + plan."""
+        mock = MockLLM(
+            concepts=[{
+                "title": "Grounded", "hook": "h",
+                "thesis": "a specific grounded claim about the saloon",
+                "why_interesting": "w", "required_evidence": ["revolver"],
+                "visual_opportunity": "close-up", "format": "f",
+            }],
+            plan={
+                "concept": {"title": "Grounded", "hook": "h", "thesis": "s"},
+                "format": {"type": "short_video_essay", "duration_sec": 90},
+                "editorial_direction": {"pacing": "p", "visual_style": "v",
+                                        "audio_style": "a", "editing_style": "e"},
+            },
+        )
+        director = MovieGroundedDirector(mock, memory_dir=tmp_path / "mem")
+        res = director.develop(metadata, facts, num_concepts=1, min_coverage=0.4)
+        stats = res["llm_stats"]
+        assert stats["llm_calls"] == 2
+        assert stats["regeneration_rounds"] == 0
+        assert stats["substitutes_generated"] == 0
+
+    def test_llm_stats_count_regeneration(self, facts, metadata, tmp_path):
+        """Rejections trigger a regeneration round that is honestly counted."""
+        mock = MockLLM(
+            concepts=[{
+                "title": "Bad", "hook": "h", "thesis": "a specific claim about "
+                "alien mind control", "why_interesting": "w",
+                "required_evidence": ["flying saucer", "telepathy beam"],
+                "visual_opportunity": "x", "format": "f",
+            }],
+            regenerate_to=[{
+                "title": "Good", "hook": "h",
+                "thesis": "a specific claim grounded in the saloon scene",
+                "why_interesting": "w", "required_evidence": ["revolver"],
+                "visual_opportunity": "close-up", "format": "f",
+            }],
+            plan={
+                "concept": {"title": "Good", "hook": "h", "thesis": "s"},
+                "format": {"type": "short_video_essay", "duration_sec": 90},
+                "editorial_direction": {"pacing": "p", "visual_style": "v",
+                                        "audio_style": "a", "editing_style": "e"},
+            },
+        )
+        director = MovieGroundedDirector(mock, memory_dir=tmp_path / "mem")
+        res = director.develop(metadata, facts, num_concepts=1, min_coverage=0.5)
+        stats = res["llm_stats"]
+        assert stats["regeneration_rounds"] == 1
+        assert stats["substitutes_generated"] == 1
+        assert stats["llm_calls"] == 3  # brainstorm + regenerate + plan
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

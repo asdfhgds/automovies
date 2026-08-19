@@ -90,11 +90,24 @@
 - ✅ **Hallucination-safe**: unknown characters marked
   `unknown_character_01 (low confidence)`; concepts must carry `required_evidence`
   that matches real scenes; the Director can **reject its own idea**.
-- ✅ **`scripts/run_director_validation.py`** — gated real-Qwen Colab validation.
+- ✅ **`scripts/run_director_validation.py`** — gated real-Qwen Colab validation;
+  now records honest runtime measurements (GPU/VRAM from torch, model load time,
+  per-call generation times, LLM call counts, regeneration rounds,
+  substitutes generated, wall clock) into `reports/director_validation.json`.
+- ✅ **`src/director/grounded.py` run bookkeeping** — `result["llm_stats"]`
+  counts LLM calls / regeneration rounds / substitutes generated (never
+  fabricated; covered by 2 new unit tests).
+- ✅ **`reports/director_validation.md` / `.json` (repo root)** — blank
+  human-evaluation scaffold (specificity / grounding / originality /
+  visual_potential / generic_ai_feeling / human_notes), filled only by a human
+  after the real run.
+- ✅ **`notebooks/colab_grounded_director_validation.ipynb`** — dedicated
+  real-Qwen director validation on the existing `bc6384be-...` movie
+  (GPU check → clone+deps → Drive mount → strict run → show outputs).
 - ✅ **`notebooks/colab_vision_gpu.ipynb` Cell 7d** — grounded director; Cell 7b
   default flipped to `embedding`.
-- ✅ **221 tests pass** (21 new grounded-director tests); real-Qwen test gated
-  (`llm_integration`).
+- ✅ **272 tests pass** (23 new grounded-director tests, incl. 2 run-bookkeeping);
+  real-Qwen test gated (`llm_integration`).
 - ⏳ **Real-Qwen clip run pending** (validated movie `bc6384be-...`). Stops at the
   plan — NOT wired to the script stage (§11).
 
@@ -403,9 +416,11 @@ Improve quality and reduce costs through iteration.
    feed the validated scene knowledge into the Creative Director
 5c. ✅ **Movie-grounded Creative Director built + tested** — SceneFacts + context
    builder + evidence gate (reject generic/un-evidenced) + ConceptCritic +
-   scene-aware plan + `director_reasoning.md`; 221 fast tests pass.
+   scene-aware plan + `director_reasoning.md`; 272 fast tests pass. Validation
+   harness now records honest runtime/GPU/regeneration measurements and a
+   dedicated Colab notebook exists (`colab_grounded_director_validation.ipynb`).
    ⏳ **Real-Qwen clip validation pending** (validated movie `bc6384be-...`,
-   `scripts/run_director_validation.py` / Notebook Cell 7d) — then wire the
+   `scripts/run_director_validation.py` / the new notebook / Cell 7d) — then wire the
    selected concept + evidence strategy to narrative/editorial generation in the
    *next* milestone (§11).
 6. ⏳ Evaluate several real videos; pick next milestone from the largest visible weakness

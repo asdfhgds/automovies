@@ -1,0 +1,28 @@
+{
+  "project_id": "bc6384be-47a5-4ee8-8674-7ff861472026",
+  "status": "AWAITING_REAL_QWEN_RUN",
+  "note": "Human-evaluation scaffold. The 'runtime' fields must come from the real run's director_validation.json; the per-concept fields (specificity/grounding/originality/visual_potential/generic_ai_feeling/human_notes) are human judgments and must NOT be fabricated or filled from unit tests.",
+  "runtime": {
+    "gpu": "not measured",
+    "vram_total_gb": "not measured",
+    "vram_peak_allocated_mb": "not measured",
+    "model": "not measured",
+    "device": "not measured",
+    "dtype": "not measured",
+    "model_load_time_sec": "not measured",
+    "total_generation_time_sec": "not measured",
+    "llm_calls": "not measured",
+    "regeneration_rounds": "not measured",
+    "substitutes_generated": "not measured",
+    "wall_clock_sec": "not measured",
+    "concepts_generated": "not measured",
+    "concepts_rejected": "not measured",
+    "selected_concept": "not measured",
+    "diversity_metric": "not measured"
+  },
+  "decision_gate": "awaiting_run",
+  "concepts": [],
+  "grounding_audit": [],
+  "hallucination_examples": [],
+  "main_problems": []
+}
