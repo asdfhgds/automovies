@@ -57,7 +57,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_NUM_CONCEPTS = 5
 DEFAULT_MIN_COVERAGE = 0.4
-DEFAULT_MAX_REJECT_ROUNDS = 2
+# Bounded regeneration: one initial batch, then at most a single corrective
+# retry. If retries still cannot produce a grounded concept, the run FAILS by
+# leaving selected_concept/plan None (never forced through).
+DEFAULT_MAX_REJECT_ROUNDS = 1
 
 
 class MovieGroundedDirector:

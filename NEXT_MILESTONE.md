@@ -105,16 +105,29 @@ retrieval human-verdict record is tracked in `reports/`.
     `paraphrase-multilingual-MiniLM-L12-v2` for non-English).
   - **Movie-grounded Creative Director (new)**: `SceneFacts` normalizes the
     existing Movie Intelligence; `DirectorContextBuilder` makes a compact,
-    token-limited, fact-grounded context; `EvidenceAnalyzer` grounds
-    `required_evidence` to real scenes (coverage HIGH/MED/LOW, no new retrieval
-    layer); `MovieGroundedDirector` generates 5 diverse concepts → rejects
-    generic / un-evidenced ideas (with regeneration) → `ConceptCritic` +
+    token-limited, fact-grounded context; `EvidenceAnalyzer` grounds concepts to
+    real scenes; `MovieGroundedDirector` generates 5 diverse concepts → rejects
+    generic / un-evidenced ideas (bounded regeneration: initial batch + one
+    corrective retry, then FAIL rather than force-through) → `ConceptCritic` +
     coverage → select → scene-aware plan → `CreativeMemory` →
     `reports/director_reasoning.md`. Hallucination-safe (unknown characters
     marked `unknown_character_01 (low confidence)`; vocab limited to facts that
     exist). Stops at the plan — NOT wired to the script stage.
-- Local E2E: **272 fast tests pass** (vision, artifacts, retrieval, editorial,
-    movie-understanding, semantic-embedding, grounded-director suites).
+  - **Structured evidence contract (`evidence_refs`)**: the milestone schema is
+    extended so every concept separates its *creative claim* from *evidence
+    references* — each ref names a canonical identifier the movie actually
+    contains (scene id, character, object, location, action, event, theme,
+    mood, dialogue). `required_evidence` is derived from the refs (one source of
+    truth, no duplicate schema) and forwarded, with the refs, into the grounding
+    contract for the script stage. Grounding is exact-ID-first, then
+    canonical/alias vocabulary matching, then exact token containment — never
+    arbitrary substring (`is_grounded("son")` is no longer True just because
+    "person" appears). `concept_evidence` reports `requested_refs` /
+    `matched_refs` / `missing_refs` and `matched_scenes`; the reasoning report
+    shows every ref's per-scene status.
+- Local E2E: **288 fast tests pass** (vision, artifacts, retrieval, editorial,
+    movie-understanding, semantic-embedding, grounded-director, evidence-contract
+    suites).
   - **Real-movie run executed (Colab T4)**: project `5398e39c-d35b-481a-b580-
     42d7224732eb` — `Qwen/Qwen2.5-VL-3B-Instruct` (bf16), 120.078s window
     (Portuguese-dubbed clip; English is the normal case),

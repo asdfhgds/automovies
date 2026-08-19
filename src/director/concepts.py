@@ -5,13 +5,22 @@ model output). The director layer is responsible for wiring either the Qwen
 provider (``provider.generate_text``) or a mock. Everything here is pure string
 generation + tolerant JSON parsing; no model-side assumptions leak in.
 
-The concept schema is the milestone's::
+The concept schema is the milestone's, extended with a structured evidence
+contract::
 
     {
       "title", "hook", "thesis", "why_interesting",
-      "required_evidence": ["..."],
+      "evidence_refs": [ {"kind": "scene", "scene_id": "scene-1"},
+                         {"kind": "object", "value": "revolver"} ],
       "visual_opportunity", "format"
     }
+
+``evidence_refs`` is the *authoritative* grounding contract: every ref must name
+an identifier (scene id / character / object / location / action / event /
+theme / mood / dialogue) that literally exists in the movie intelligence.
+``required_evidence`` is kept as a *derived* convenience field (one line per
+ref) so every existing downstream consumer stays on a single source of truth —
+no duplicate schema.
 
 plus an optional ``diversity_angle`` tag so five concepts are measured as
 meaningfully different across the requested dimensions.
@@ -24,7 +33,14 @@ from typing import Callable, Dict, Any, List, Optional
 logger = logging.getLogger(__name__)
 
 CONCEPT_REQUIRED_FIELDS = ("title", "hook", "thesis", "why_interesting",
-                           "required_evidence", "visual_opportunity", "format")
+                           "evidence_refs", "visual_opportunity", "format")
+
+#: The evidence-ref kinds the grounding matcher understands. Anything else is
+#: treated as a generic ``text`` ref (matched by exact token presence only).
+EVIDENCE_KINDS = frozenset({
+    "scene", "character", "object", "location", "action", "event",
+    "theme", "mood", "dialogue", "text",
+})
 
 DIVERSITY_DIMENSIONS = [
     "philosophy", "psychology", "character", "symbolism", "cinematography",
@@ -45,6 +61,82 @@ GENERIC_THESIS_PATTERNS = (
     "characters show emotions",
     "good versus evil",
 )
+
+
+# -- Evidence references (the structured grounding contract) -----------------
+
+def _normalize_ref(raw: Any) -> Optional[Dict[str, Any]]:
+    """Coerce one evidence reference into ``{kind, scene_id|value}`` or None.
+
+    Accepts the structured dict form (``{"kind": ..., "value": ...}`` /
+    ``{"kind": "scene", "scene_id": ...}``) as well as legacy strings such as
+    ``"revolver"`` or ``"scene: scene-1"``.
+    """
+    if isinstance(raw, dict):
+        kind = str(raw.get("kind") or "text").strip().lower()
+        if kind not in EVIDENCE_KINDS:
+            kind = "text"
+        if kind == "scene":
+            sid = str(raw.get("scene_id") or raw.get("value") or "").strip()
+            if not sid:
+                return None
+            return {"kind": "scene", "scene_id": sid}
+        value = str(raw.get("value") or raw.get("scene_id") or "").strip()
+        if not value:
+            return None
+        return {"kind": kind, "value": value}
+    if isinstance(raw, str):
+        item = raw.strip()
+        if not item:
+            return None
+        m = re.match(r"^scene\s*[:#]\s*(.+)$", item, re.IGNORECASE)
+        if m:
+            return {"kind": "scene", "scene_id": m.group(1).strip()}
+        return {"kind": "text", "value": item}
+    return None
+
+
+def concept_refs(concept: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The authoritative evidence refs of a concept.
+
+    Reads ``evidence_refs`` when present; otherwise derives refs from the legacy
+    ``required_evidence`` strings (so older outputs stay analysable).
+    """
+    raw = concept.get("evidence_refs")
+    if isinstance(raw, list) and raw:
+        out = []
+        for r in raw:
+            ref = _normalize_ref(r)
+            if ref:
+                out.append(ref)
+        if out:
+            return out
+    legacy = concept.get("required_evidence") or []
+    if isinstance(legacy, str):
+        legacy = [legacy]
+    out = []
+    for item in legacy:
+        ref = _normalize_ref(str(item))
+        if ref:
+            out.append(ref)
+    return out
+
+
+def render_ref(ref: Dict[str, Any]) -> str:
+    """One-line render of a ref (used to derive ``required_evidence``)."""
+    if ref.get("kind") == "scene":
+        return str(ref.get("scene_id") or "")
+    return str(ref.get("value") or "")
+
+
+def _refs_line(ref: Dict[str, Any]) -> str:
+    """Reprint a ref as a stable schema line (for prompts/reports)."""
+    if ref.get("kind") == "scene":
+        return f'{{"kind": "scene", "scene_id": "{ref.get("scene_id", "")}"}}'
+    return f'{{"kind": "{ref.get("kind", "text")}", "value": "{ref.get("value", "")}"}}'
+
+
+# -- Prompt builders ---------------------------------------------------------
 
 
 def build_generation_prompt(
@@ -69,17 +161,22 @@ these must appear across the set):
 {topics}
 
 MANDATORY GROUNDING (from the context above):
-- Cite only SCENE ids, characters, objects, locations, themes, and dialogue that
-  actually appear in the context. NEVER invent anyone or anything.
-- required_evidence must list specific concrete claims you would need on screen,
-  each phrased as a short phrase (e.g. "revolver close-up", "man walking in
-  water", "silence before dialogue"). These will be checked against the scenes.
-- If the movie lacks material for a thesis, do NOT force it. Pick a thesis that
-  the available scenes actually support.
+1. Separate your CREATIVE CLAIM from your EVIDENCE REFERENCES.
+   title / hook / thesis / why_interesting are interpretation; evidence_refs
+   must ONLY name identifiers that literally appear in the context.
+2. Cite only SCENE ids, characters, objects, locations, actions, themes, moods,
+   or dialogue that actually appear. NEVER invent anyone or anything.
+3. Every evidence_ref must use exact canonical identifiers from WHAT ACTUALLY
+   EXISTS and the scene cards. Prefer a scene ref ({{"kind": "scene",
+   "scene_id": "scene-1"}}) whenever a specific scene carries your point.
+4. The matcher is exact and token-based: "son" will NOT match just because
+   "person" also appears; an object you cite must literally be listed.
+5. If the movie lacks material for a thesis, do NOT force it. Pick a thesis the
+   available scenes actually support.
 
 DO NOT produce five versions of "the movie explores violence/problem X". Each
-concept must have its own hook, thesis, and required evidence that points to
-real scenes.
+concept must have its own hook, thesis, and a distinct set of grounded
+evidence_refs.
 
 Return ONLY valid JSON (no markdown, no code fences) with this structure:
 {{
@@ -89,13 +186,21 @@ Return ONLY valid JSON (no markdown, no code fences) with this structure:
       "hook": "An engaging opening that draws the viewer in",
       "thesis": "A specific, defensible, evidence-based argument about THIS movie",
       "why_interesting": "Why this angle is surprising / worth watching",
-      "required_evidence": ["short concrete claim 1", "short concrete claim 2"],
+      "evidence_refs": [
+        {{"kind": "scene", "scene_id": "scene-1"}},
+        {{"kind": "object", "value": "revolver"}}
+      ],
       "visual_opportunity": "Concrete visual/editing treatment you would shoot or find in scenes",
       "format": "short_video_essay",
       "diversity_angle": "the divergence dimension this concept explores"
     }}
   ]
 }}
+
+evidence_refs kinds: scene | character | object | location | action | event |
+theme | mood | dialogue. Use 3-6 grounded refs per concept; at least one of them
+must be a scene id. Do NOT put interpretation inside evidence_refs — only
+catalogued identifiers.
 {user_part}
 
 Generate now:
@@ -109,7 +214,8 @@ def build_rejection_prompt(
 ) -> str:
     """Prompt to replace concepts that failed evidence grounding."""
     rejected_blob = "\n".join(
-        f"- [{c.get('title', '?')}] {c.get('thesis', '')}"
+        f"- [{c.get('title', '?')}] thesis={c.get('thesis', '')} "
+        f"evidence_refs=[{', '.join(_refs_line(r) for r in concept_refs(c))}]"
         for c in rejected
     )
     return f"""
@@ -118,11 +224,15 @@ concepts were REJECTED because the movie's scenes did not actually contain the
 evidence they claimed. Generate {substitutes_needed} NEW replacement concepts
 that are grounded in the actual scenes shown in the context below.
 
-GROUNDING RULES: Only cite SCENE ids / characters / objects / locations /
-dialogue that appear in the context. required_evidence claims MUST be matched
-by real scenes. Do not repeat the rejected ideas' theses.
+GROUNDING RULES:
+- Keep your CREATIVE CLAIM separate from your evidence_refs.
+- evidence_refs must ONLY use exact canonical identifiers from the context
+  (scene ids, characters, objects, locations, actions, themes, moods, dialogue).
+- Every replacement concept needs at least one scene ref
+  ({{"kind": "scene", "scene_id": "scene-1"}}).
+- Do not repeat the rejected ideas' theses or their ungrounded refs.
 
-Rejected concepts (do not repeat the same theses):
+Rejected concepts (do not repeat these):
 {rejected_blob}
 
 Return ONLY valid JSON (no markdown, no code fences):
@@ -130,8 +240,13 @@ Return ONLY valid JSON (no markdown, no code fences):
   "concepts": [
     {{
       "title": "...", "hook": "...", "thesis": "...", "why_interesting": "...",
-      "required_evidence": ["..."], "visual_opportunity": "...",
-      "format": "short_video_essay", "diversity_angle": "..."
+      "evidence_refs": [
+        {{"kind": "scene", "scene_id": "scene-1"}},
+        {{"kind": "object", "value": "revolver"}}
+      ],
+      "visual_opportunity": "...",
+      "format": "short_video_essay",
+      "diversity_angle": "..."
     }}
   ]
 }}
@@ -264,7 +379,11 @@ def parse_concepts(response_text: str) -> List[Dict[str, Any]]:
 
 
 def _normalize_concept(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Coerce a parsed concept into the full milestone schema or None."""
+    """Coerce a parsed concept into the full milestone schema or None.
+
+    ``evidence_refs`` is the authoritative grounding contract; ``required_evidence``
+    is derived from it (one rendered line per ref) for downstream consumers.
+    """
     if not raw:
         return None
     title = str(raw.get("title") or "").strip()
@@ -272,18 +391,18 @@ def _normalize_concept(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not title or not thesis:
         return None
 
-    required = raw.get("required_evidence")
-    if isinstance(required, str):
-        required = [required]
-    required = [str(r).strip() for r in (required or []) if str(r).strip()]
-    if not required:
+    refs = concept_refs(raw)
+    if not refs:
         return None  # no evidence ask => can't be grounded
+
+    required = [r for r in (render_ref(x) for x in refs) if r]
 
     concept = {
         "title": title,
         "hook": str(raw.get("hook") or "").strip(),
         "thesis": thesis,
         "why_interesting": str(raw.get("why_interesting") or "").strip(),
+        "evidence_refs": refs,
         "required_evidence": required,
         "visual_opportunity": str(raw.get("visual_opportunity") or "").strip(),
         "format": str(raw.get("format") or "short_video_essay").strip(),

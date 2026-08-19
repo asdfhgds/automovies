@@ -16,7 +16,7 @@ Both are deterministic. No LLM calls happen here.
 """
 from typing import Dict, Any, List, Optional, Tuple
 
-from director.scene_facts import SceneFacts
+from director.scene_facts import SceneFacts, _as_list
 
 
 def _fmt_ts(value) -> str:
@@ -126,13 +126,25 @@ class DirectorContextBuilder:
             dur_str = str(duration)
         grounding = (
             "## GROUNDING RULES (MANDATORY)\n"
-            "You may ONLY reference the characters, locations, objects, themes, "
-            "and dialogue listed below. These are everything known to exist.\n"
-            "- If a fact is missing or uncertain, say so explicitly. NEVER invent "
-            "a character name, line of dialogue, object, or scene that is not listed.\n"
-            "- Refer to scenes by their SCENE id exactly as shown.\n"
-            "- Every concept's required_evidence must cite specific SCENE ids "
-            "that actually appear below."
+            "1. Separate your CREATIVE CLAIM (title / hook / thesis /\n"
+            "why_interesting) from your EVIDENCE REFERENCES (evidence_refs).\n"
+            "The thesis is your interpretation; evidence_refs may ONLY name\n"
+            "facts listed in this context.\n"
+            "2. You may ONLY reference the characters, locations, objects,\n"
+            "actions, themes, moods, and dialogue listed below. These are\n"
+            "everything known to exist.\n"
+            "3. If a fact is missing or uncertain, say so explicitly. NEVER\n"
+            "invent a character name, line of dialogue, object, location,\n"
+            "action, or scene.\n"
+            "4. Refer to scenes by their SCENE id exactly as shown (e.g.\n"
+            "\"scene-1\"). Prefer a scene ref whenever a specific scene carries\n"
+            "your point.\n"
+            "5. Every evidence_ref must be a canonical identifier from this\n"
+            "context: {\"kind\": \"scene\", \"scene_id\": \"scene-1\"} or\n"
+            "{\"kind\": \"object\", \"value\": \"...\"}, and so on for\n"
+            "character / location / action / event / theme / mood / dialogue.\n"
+            "6. The matcher is exact and token-based: \"son\" will NOT match\n"
+            "just because \"person\" also appears here."
         )
         parts.append(
             f"## MOVIE\nTitle: {title}\nDuration: {dur_str}\n\n{grounding}"
@@ -146,10 +158,25 @@ class DirectorContextBuilder:
             parts.append("## ACTUAL SCENES\n" + "\n\n".join(chosen))
 
         # 3. Fact vocabulary (known names — hallucination guard).
+        def _unique(values, limit=24):
+            seen, out = set(), []
+            for v in values:
+                key = str(v).strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    out.append(str(v).strip())
+            return out[:limit]
+
+        actions = _unique(a for sf in scene_facts for a in sf.actions)
+        themes = _unique(t for sf in scene_facts for t in sf.themes)
+        moods = _unique(m for sf in scene_facts for m in _as_list(sf.mood))
         vocab_lines = [
             f"- Known characters: {', '.join(scene_facts.known_characters()) or '(none identified)'}",
             f"- Known locations: {', '.join(scene_facts.known_locations()) or '(none identified)'}",
             f"- Known objects: {', '.join(scene_facts.known_objects()) or '(none identified)'}",
+            f"- Known actions: {', '.join(actions) or '(none identified)'}",
+            f"- Known themes: {', '.join(themes) or '(none identified)'}",
+            f"- Known moods: {', '.join(moods) or '(none identified)'}",
         ]
         vocab = "## WHAT ACTUALLY EXISTS\n" + "\n".join(vocab_lines)
         if self._estimate_tokens(vocab) <= int(self.available * 0.7):

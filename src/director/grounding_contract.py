@@ -17,6 +17,7 @@ from movie_understanding import movie_memory
 # editorial planner) can rely on this set without re-deriving it.
 CONTRACT_KEYS = (
     "concept",
+    "evidence_refs",
     "evidence_requirements",
     "supporting_scenes",
     "visual_motifs",
@@ -36,6 +37,7 @@ def build_grounding_contract(
     Everything is read from data the director already produced:
 
     - ``concept``            <- plan.concept + selected_concept.why_interesting
+    - ``evidence_refs``       <- selected_concept.evidence_refs (structured refs)
     - ``evidence_requirements`` <- selected_concept.required_evidence
     - ``supporting_scenes``  <- plan.evidence_strategy.scene_ids (with times)
     - ``visual_motifs``      <- plan.evidence_strategy.visual_motifs
@@ -72,6 +74,14 @@ def build_grounding_contract(
     editorial = dict(plan.get("editorial_direction") or {})
     return {
         "concept": concept,
+        "evidence_refs": [
+            {
+                "kind": r.get("kind", "text"),
+                "scene_id": r.get("scene_id"),
+                "value": r.get("value"),
+            }
+            for r in (selected.get("evidence_refs") or [])
+        ],
         "evidence_requirements": list(selected.get("required_evidence") or []),
         "supporting_scenes": supporting_scenes,
         "visual_motifs": list(strategy.get("visual_motifs") or []),

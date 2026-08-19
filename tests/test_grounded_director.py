@@ -234,7 +234,8 @@ class TestConcepts:
         prompt = build_generation_prompt("CTX", num_concepts=5)
         assert "philosophy" in prompt
         assert "narrative_structure" in prompt
-        assert "required_evidence" in prompt
+        assert "evidence_refs" in prompt
+        assert "structured" in prompt or "kind" in prompt
         assert "5" in prompt
 
     def test_parse_concepts(self):

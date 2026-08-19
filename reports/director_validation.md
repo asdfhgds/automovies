@@ -95,7 +95,7 @@ the gate works.
 
 ## 7. Fix required (per task: ONLY the demonstrated problems)
 
-- Strengthen the **generation prompt + context** so `required_evidence` MUST be
+- Strengthen the **generation prompt + context** so evidence references MUST be
   drawn verbatim from the provided known objects/locations/tokens (as
   single claims), and explicitly forbid inventing scenes/characters/objects.
 - Keep the strict evidence gate (it is proven correct).
@@ -106,5 +106,25 @@ the gate works.
 
 ## 8. Tests passed
 
-272 fast tests (before this fix); targeted matcher/prompt unit tests to be added
-with the fix.
+288 fast tests (after this fix), including the new
+`tests/test_grounded_evidence_contract.py` (exact-scene-id refs, canonical
+vocabulary aliases, no-substring matching, structured `concept_evidence`
+fields, coverage labels, bounded regeneration). Real-Qwen re-run is gated on a
+GPU machine (`python -m pytest tests/test_grounded_director_real_qwen.py -m
+llm_integration -v`).
+
+## 9. Contract change implemented (this fix)
+
+- **`evidence_refs`** replaces free-form evidence claims as the authoritative
+  grounding contract: `{"kind": "scene", "scene_id": "scene-1"}` /
+  `{"kind": "object", "value": "revolver"}` etc. (`required_evidence` is now a
+  derived field — one rendered line per ref — so no duplicate schema exists).
+- Grounding order: exact scene id → canonical vocabulary identifier / alias →
+  exact token containment. Arbitrary substring matching is no longer used
+  (fixes the demonstrated "son"→"person" false positive).
+- Bounded regeneration: initial batch of 5, then at most one corrective retry;
+  if nothing grounds, the run FAILS with `selected_concept=None` /
+  `plan=None` instead of forcing an ungrounded concept through.
+- `concept_evidence` now exposes `requested_refs`, `matched_refs`,
+  `missing_refs` and `matched_scenes`; the reasoning report lists every ref's
+  matched-scene status and the missing evidence.

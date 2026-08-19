@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from director.evidence import EvidenceAnalyzer
+from director.concepts import render_ref
 
 
 def _line(label, value, indent="  "):
@@ -59,9 +60,20 @@ def build_report(
                 f"### Rejected {j}. {concept.get('title', '?')}",
                 _line("Thesis", concept.get("thesis", "")),
                 _line("Coverage", f"{ev['coverage']} "
-                      f"({ev['matched_claims']}/{max(1, len(ev['required_evidence']))} matched)"),
+                      f"({ev['matched_claims']}/{max(1, len(ev['requested_refs']))} refs matched)"),
                 "",
             ]
+            if ev["requested_refs"]:
+                lines.append("  Evidence refs:")
+                matched_labels = {
+                    r.get("scene_id") or r.get("value")
+                    for r in ev["matched_refs"]
+                }
+                for ref in ev["requested_refs"]:
+                    label = render_ref(ref)
+                    status = "matched" if label in matched_labels else "NOT FOUND"
+                    lines.append(f"    - {label}: {status}")
+                lines.append("")
 
     if selected is not None:
         lines += [

@@ -98,6 +98,12 @@ def contract(movie_index):
                       "any character makes it aloud.",
             "why_interesting": "The visual staging does the arguing, not the script.",
         },
+        "evidence_refs": [
+            {"kind": "object", "value": "revolver"},
+            {"kind": "object", "value": "bar"},
+            {"kind": "scene", "scene_id": "scene-1"},
+            {"kind": "dialogue", "value": "Keep your hands where I can see them."},
+        ],
         "evidence_requirements": [
             "a revolver is placed on the bar",
             "dialogue between characters",
@@ -183,6 +189,7 @@ def test_contract_built_from_director_result(movie_index):
 
     mv = build_grounding_contract(result, facts, movie_index)
     assert mv["concept"]["thesis"]
+    assert mv["evidence_refs"], "evidence refs are forwarded to the contract"
     assert mv["supporting_scenes"], "contract supporting scenes are populated"
     assert all(s["scene_id"] in {sc["scene_id"] for sc in movie_index["scenes"]}
                for s in mv["supporting_scenes"])

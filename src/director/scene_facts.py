@@ -14,6 +14,7 @@ It is deliberately free of any LLM call. Everything here is deterministic:
 - a hallucination guard: given a claimed name / location / object, tell the
   caller whether it is grounded in the index or not.
 """
+import re
 from typing import Any, Dict, Iterable, List, Optional
 
 # Fields each SceneFact exposes. ``story`` is the enriched Qwen3-VL card when
@@ -43,6 +44,50 @@ def _as_list(value: Optional[Any]) -> List[str]:
     if isinstance(value, list):
         return [str(v) for v in value if v]
     return [str(value)]
+
+
+# -- Canonical vocabulary helpers --------------------------------------------
+
+_EN_ARTICLES = ("a ", "an ", "the ")
+
+# Significant-token filtering for exact (token-level) grounding. A claimed
+# value only counts as present if every one of these tokens literally appears
+# in the scene's facts — never via arbitrary substring containment.
+_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "by", "for",
+    "with", "from", "as", "is", "are", "was", "were", "be", "been", "it", "its",
+    "this", "that", "these", "those", "his", "her", "their", "our", "your",
+    "you", "they", "we", "he", "she", "him", "them", "his", "her", "not",
+    "then", "than", "when", "while", "into", "onto", "about", "through",
+    "since", "out", "over", "under", "between", "after", "before", "also",
+    "just", "very", "still", "who", "which", "what", "how", "there", "here",
+})
+
+
+def strip_articles(text: str) -> str:
+    low = text.lower()
+    for art in _EN_ARTICLES:
+        if low.startswith(art):
+            return text[len(art):]
+    return text
+
+
+def normalize_entity(text: str) -> str:
+    """One canonical form for entity matching: lowercase, article-stripped,
+    whitespace-collapsed, edge punctuation removed."""
+    return " ".join((text or "").lower().split()).strip(" .,;:!?\"'()")
+
+
+def significant_tokens(text: str) -> List[str]:
+    """Content tokens of ``text`` (no stopwords, len > 2) — the tokens used for
+    exact, non-substring grounding checks."""
+    toks = re.findall(r"[a-z0-9]+", (text or "").lower())
+    return [t for t in toks if len(t) > 2 and t not in _STOPWORDS]
+
+
+def _scene_id_normalized(value: str) -> str:
+    """Normalize a scene id for comparison (scene-10 / scene10 / scene 10)."""
+    return re.sub(r"[\s\-_]+", "", (value or "").lower().strip())
 
 
 class SceneFact:
@@ -219,24 +264,97 @@ class SceneFacts:
                     out.append(str(o).strip())
         return out
 
+    # -- Canonical vocabulary (for exact, alias-based grounding) --------------
+
+    def _entity_vocabulary(self, items: List[str], owner_getter) -> List[Dict[str, Any]]:
+        """Build a canonical entity vocabulary.
+
+        Each entry: ``{"display", "canonical", "aliases", "scenes"}`` where
+        ``aliases`` are the canonical form plus its significant content tokens
+        (so "counter" resolves to the canonical "counter with various items"),
+        and ``scenes`` lists every scene a viewer sees that entity in.
+        """
+        vocab: List[Dict[str, Any]] = []
+        seen_canon = set()
+        for item in items:
+            display = str(item).strip()
+            canonical = normalize_entity(strip_articles(display)) or display.lower()
+            if canonical in seen_canon:
+                continue
+            seen_canon.add(canonical)
+            aliases = [a for a in {canonical} | set(significant_tokens(display)) if a]
+            vocab.append({
+                "display": display,
+                "canonical": canonical,
+                "aliases": sorted(aliases),
+                "scenes": [],
+            })
+        for scene in self.scenes:
+            for owner in owner_getter(scene):
+                canon = normalize_entity(strip_articles(str(owner)))
+                for entry in vocab:
+                    if entry["canonical"] == canon and scene.scene_id not in entry["scenes"]:
+                        entry["scenes"].append(scene.scene_id)
+        return vocab
+
+    def character_vocabulary(self) -> List[Dict[str, Any]]:
+        """Canonical character vocabulary with scene membership."""
+        return self._entity_vocabulary(self.known_characters(), lambda s: s.characters)
+
+    def location_vocabulary(self) -> List[Dict[str, Any]]:
+        """Canonical location vocabulary with scene membership."""
+        return self._entity_vocabulary(self.known_locations(), lambda s: _as_list(s.location))
+
+    def object_vocabulary(self) -> List[Dict[str, Any]]:
+        """Canonical object vocabulary with scene membership."""
+        return self._entity_vocabulary(self.known_objects(), lambda s: s.objects)
+
     def all_facts_text(self) -> str:
         return " ".join(s.fact_text() for s in self.scenes)
 
     # -- Hallucination guard ------------------------------------------------
 
+    @staticmethod
+    def _all_significant_tokens_present(target: str, corpus: str) -> bool:
+        tokens = significant_tokens(target)
+        if not tokens:
+            return False
+        body = set(significant_tokens(corpus))
+        return all(t in body for t in tokens)
+
     def is_known_character(self, name: str) -> bool:
-        target = str(name).strip().lower()
-        return any(target in str(c).lower() for c in self.known_characters())
+        target = str(name).strip()
+        canon = normalize_entity(strip_articles(target))
+        vocab = self.character_vocabulary()
+        if any(canon in entry["aliases"] for entry in vocab):
+            return True
+        return self._all_significant_tokens_present(
+            target, " ".join(self.known_characters()))
 
     def is_known_object(self, term: str) -> bool:
-        target = str(term).strip().lower()
-        return any(target in str(o).lower() for o in self.known_objects())
+        target = str(term).strip()
+        canon = normalize_entity(strip_articles(target))
+        vocab = self.object_vocabulary()
+        if any(canon in entry["aliases"] for entry in vocab):
+            return True
+        return self._all_significant_tokens_present(
+            target, " ".join(self.known_objects()))
+
+    def is_known_location(self, term: str) -> bool:
+        target = str(term).strip()
+        canon = normalize_entity(strip_articles(target))
+        vocab = self.location_vocabulary()
+        if any(canon in entry["aliases"] for entry in vocab):
+            return True
+        return self._all_significant_tokens_present(
+            target, " ".join(self.known_locations()))
 
     def is_grounded(self, term: str) -> bool:
-        """True if ``term`` appears anywhere in the movie's actual facts."""
+        """True if every significant token of ``term`` literally appears in the
+        movie's actual facts (exact token containment, never substring)."""
         if not term:
             return True  # vacuous
-        return str(term).strip().lower() in str(self.all_facts_text()).lower()
+        return self._all_significant_tokens_present(term, self.all_facts_text())
 
     def used_scene_ids(self) -> List[str]:
         return [s.scene_id for s in self.scenes]
