@@ -256,17 +256,34 @@ Generate now:
 
 
 def build_plan_prompt(context: str, duration_sec: int = 90) -> str:
-    """Prompt to build the final scene-aware director plan."""
+    """Prompt to build the final scene-aware director plan.
+
+    The concept is already decided (deterministic — the selected concept). The
+    model must only produce ``format`` and ``editorial_direction``, and every
+    claim there must be grounded in the evidence scenes shown. It must NOT
+    invent new characters, objects, locations, or moments.
+    """
     return f"""
-You are a director finalizing the plan for the selected concept, grounded ONLY
-in the evidence scenes shown below. The video is {duration_sec} seconds.
+You are a director finalizing the plan for the SELECTED CONCEPT shown below,
+grounded ONLY in the evidence scenes also shown. The video is {duration_sec}
+seconds.
+
+MANDATORY:
+- The concept (title / hook / thesis) is FINAL and given to you. Copy it
+  verbatim into "concept". Do not write a different concept, movie, or thesis.
+- editorial_direction must describe ONLY the moments, objects, characters, and
+  locations that appear in the evidence scenes below. NEVER invent a new scene,
+  character, object, location, or line of dialogue.
+- If a moment is ambiguous, describe it abstractly (e.g. "the figure's
+  stillness") rather than inventing concrete objects (e.g. a broken clock, a
+  patient's bed) that are not in the scenes.
 
 Return ONLY valid JSON (no markdown, no code fences) with this structure:
 {{
   "concept": {{
-    "title": "...",
-    "hook": "...",
-    "thesis": "..."
+    "title": "copy of the selected concept title",
+    "hook": "copy of the selected concept hook",
+    "thesis": "copy of the selected concept thesis"
   }},
   "format": {{
     "type": "short_video_essay",
@@ -281,9 +298,9 @@ Return ONLY valid JSON (no markdown, no code fences) with this structure:
 }}
 
 The evidence_strategy is computed deterministically from the scenes by the
-system, so you only provide concept / format / editorial_direction. Base every
-claim in editorial_direction on the evidence scenes shown. Do not invent
-characters, objects, or moments.
+system, so you only provide concept (copied) / format / editorial_direction.
+Base every claim in editorial_direction on the evidence scenes shown. Do not
+invent characters, objects, or moments.
 
 Generate now:
 """

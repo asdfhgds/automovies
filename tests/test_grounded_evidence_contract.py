@@ -200,6 +200,41 @@ class TestEvidenceContract:
         assert analyzer.concept_evidence(concept)["requested_refs"] == []
         assert analyzer.is_sufficient(concept, min_coverage=0.4) is False
 
+    def test_scene_refs_alone_do_not_pass_gate(self, analyzer):
+        # A concept citing only real scene ids carries no verifiable claims.
+        concept = {"thesis": "t", "evidence_refs": [
+            {"kind": "scene", "scene_id": "scene-1"},
+            {"kind": "scene", "scene_id": "scene-2"}]}
+        ev = analyzer.concept_evidence(concept)
+        assert ev["matched_scenes"] == ["scene-1", "scene-2"]
+        assert ev["claim_refs"] == []
+        assert analyzer.is_sufficient(concept, min_coverage=0.4) is False
+
+    def test_claim_gate_rejects_invented_claims_even_with_matched_scene(
+            self, analyzer):
+        # scene-1 is real, but "son" and "flying saucer" do not exist in this
+        # movie — this is exactly the FAIL-run pattern (grounded only by scene
+        # ids while every claim is invented).
+        concept = {"thesis": "t", "evidence_refs": [
+            {"kind": "scene", "scene_id": "scene-1"},
+            {"kind": "character", "value": "son"},
+            {"kind": "object", "value": "flying saucer"}]}
+        ev = analyzer.concept_evidence(concept)
+        assert ev["matched_scenes"] == ["scene-1"]
+        assert ev["claim_matched"] == 0
+        assert ev["claim_ratio"] == 0.0
+        assert analyzer.is_sufficient(concept, min_coverage=0.4) is False
+
+    def test_claim_gate_admits_grounded_claims(self, analyzer):
+        concept = {"thesis": "t", "evidence_refs": [
+            {"kind": "scene", "scene_id": "scene-1"},
+            {"kind": "object", "value": "revolver"},
+            {"kind": "theme", "value": "confrontation"}]}
+        ev = analyzer.concept_evidence(concept)
+        assert ev["claim_matched"] == 2
+        assert ev["claim_coverage"] == "HIGH"
+        assert analyzer.is_sufficient(concept, min_coverage=0.4) is True
+
     def test_evidence_refs_derived_from_legacy_and_vice_versa(self):
         legacy = parse_concepts(json.dumps({"concepts": [{
             "title": "T", "hook": "H", "thesis": "a specific thesis",
@@ -296,6 +331,54 @@ class TestBoundedRegeneration:
         strat = EvidenceAnalyzer(facts).build_evidence_strategy(concept)
         assert set(strat["scene_ids"]) == {"scene-1", "scene-3"}
         assert "scene-2" not in strat["scene_ids"]
+
+    def test_plan_concept_is_deterministic_from_selected(self, facts):
+        """The plan's concept block is the selected concept — the plan LLM must
+        never re-imagine a different movie (the FAIL run invented a hospital
+        film for a cowboy-movie concept)."""
+        class _LLM:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(self, prompt):
+                self.calls.append(prompt)
+                if "finalizing the plan" in prompt:
+                    return json.dumps({
+                        "concept": {
+                            "title": "A Different Movie",
+                            "hook": "invented",
+                            "thesis": "an invented thesis about a hospital clock",
+                        },
+                        "format": {"type": "short_video_essay",
+                                   "duration_sec": 90},
+                        "editorial_direction": {
+                            "pacing": "p", "visual_style": "v",
+                            "audio_style": "a", "editing_style": "e",
+                        },
+                    })
+                return json.dumps({"concepts": [{
+                    "title": "Real One", "hook": "h",
+                    "thesis": "a specific grounded claim about the saloon",
+                    "why_interesting": "w",
+                    "evidence_refs": [
+                        {"kind": "scene", "scene_id": "scene-1"},
+                        {"kind": "object", "value": "revolver"},
+                    ],
+                    "visual_opportunity": "close-up", "format": "f",
+                }]})
+
+        llm = _LLM()
+        director = MovieGroundedDirector(llm)
+        res = director.develop({"title": "T", "duration_sec": 90}, facts,
+                               num_concepts=1, min_coverage=0.4)
+        assert res["selected_concept"] is not None
+        plan = res["plan"]
+        # Even though the mock plan LLM returned a different movie, the plan's
+        # concept must be the selected concept, verbatim.
+        assert plan["concept"]["title"] == "Real One"
+        assert plan["concept"]["thesis"] == "a specific grounded claim about the saloon"
+        # The plan prompt must forbid re-imagining.
+        assert "copy of the selected concept" in llm.calls[-1]
 
 
 if __name__ == "__main__":

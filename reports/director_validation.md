@@ -128,3 +128,15 @@ llm_integration -v`).
 - `concept_evidence` now exposes `requested_refs`, `matched_refs`,
   `missing_refs` and `matched_scenes`; the reasoning report lists every ref's
   matched-scene status and the missing evidence.
+- **Claim gate (second iteration, after the first fixed-run verdict)**: the
+  admission gate counts only *claim refs* (everything except scene ids). Bare
+  scene-id refs prove nothing about a concept's claims, so a concept grounded
+  only by scene ids (2/5 MED with every character/object/theme claim invented)
+  is now rejected — the exact pattern observed in the first fixed run
+  (father/son/revolver/house "grounded" by two scene refs alone).
+- **Deterministic plan concept**: `plan.concept` is now copied verbatim from
+  the selected concept; the plan model only supplies `format` and
+  `editorial_direction`, and is instructed to describe only what appears in the
+  evidence scenes (the first fixed run's plan re-imagined a different movie —
+  a hospital/broken-clock film — for a cowboy-movie concept; that is no longer
+  possible).

@@ -59,20 +59,14 @@ def build_report(
             lines += [
                 f"### Rejected {j}. {concept.get('title', '?')}",
                 _line("Thesis", concept.get("thesis", "")),
-                _line("Coverage", f"{ev['coverage']} "
-                      f"({ev['matched_claims']}/{max(1, len(ev['requested_refs']))} refs matched)"),
+                _line("Claim coverage", f"{ev['claim_coverage']} "
+                      f"({ev['claim_matched']}/{max(1, len(ev['claim_refs']))} claim refs matched)"),
                 "",
             ]
-            if ev["requested_refs"]:
-                lines.append("  Evidence refs:")
-                matched_labels = {
-                    r.get("scene_id") or r.get("value")
-                    for r in ev["matched_refs"]
-                }
-                for ref in ev["requested_refs"]:
-                    label = render_ref(ref)
-                    status = "matched" if label in matched_labels else "NOT FOUND"
-                    lines.append(f"    - {label}: {status}")
+            if ev["claim_missing_refs"]:
+                lines.append("  Ungrounded claims (NOT in the movie):")
+                for ref in ev["claim_missing_refs"]:
+                    lines.append(f"    - {render_ref(ref)}")
                 lines.append("")
 
     if selected is not None:
@@ -130,8 +124,8 @@ def _candidate_section(tag: str, concept: Dict[str, Any], analyzer: EvidenceAnal
 def _selection_reason(selected, concepts, selected_index):
     ev = selected.get("_evidence") or {}
     parts = []
-    if ev.get("coverage"):
-        parts.append(f"evidence coverage {ev['coverage']}")
+    if ev.get("claim_coverage"):
+        parts.append(f"claim evidence coverage {ev['claim_coverage']}")
     score = (selected.get("critique") or {}).get("overall")
     if score is not None:
         parts.append(f"overall feasibility {float(score):.2f}")

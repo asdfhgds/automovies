@@ -209,6 +209,22 @@ class EvidenceAnalyzer:
         ratio = len(matched_refs) / total if refs else 0.0
         coverage = self._coverage_label(ratio, has_claims=bool(refs))
 
+        # Claim refs are everything EXCEPT scene refs. A concept is only
+        # genuinely grounded if its claims (characters, objects, actions,
+        # dialogue, moods, themes...) resolve to real scenes — matching a bare
+        # scene id proves nothing about the claims themselves.
+        scene_refs = [r for r in refs if r.get("kind") == "scene"]
+        claim_refs = [r for r in refs if r.get("kind") != "scene"]
+        claim_matched = [
+            r for r in matched_refs if r.get("kind") != "scene"
+        ]
+        claim_missing = [
+            r for r in missing_refs if r.get("kind") != "scene"
+        ]
+        claim_total = max(1, len(claim_refs))
+        claim_ratio = len(claim_matched) / claim_total if claim_refs else 0.0
+        claim_coverage = self._coverage_label(claim_ratio, has_claims=bool(claim_refs))
+
         character_focus = [
             str(r["value"]) for r in matched_refs
             if r.get("kind") == "character" and r.get("value")
@@ -234,6 +250,14 @@ class EvidenceAnalyzer:
             "matched_claims": len(matched_refs),
             "coverage_ratio": round(ratio, 2),
             "coverage": coverage,
+            # Claim (non-scene) grounding — the strict gate input.
+            "scene_refs": scene_refs,
+            "claim_refs": claim_refs,
+            "claim_matched_refs": claim_matched,
+            "claim_missing_refs": claim_missing,
+            "claim_matched": len(claim_matched),
+            "claim_ratio": round(claim_ratio, 2),
+            "claim_coverage": claim_coverage,
             "character_focus": character_focus,
             "visual_motifs": visual_motifs,
             "supporting_scene_ids": scenes_seen,
@@ -299,14 +323,21 @@ class EvidenceAnalyzer:
         min_coverage: float = 0.4,
         required_evidence: Optional[List[str]] = None,
     ) -> bool:
-        """A concept is admissible only if it carries evidence refs and enough
-        of them resolve to real scenes."""
+        """A concept is admissible only if its CLAIM refs (everything except
+        scene ids) resolve to real scenes at or above ``min_coverage``.
+
+        Bare scene-id refs prove nothing about the concept's claims, so they do
+        not count toward admissibility. A concept also needs at least one
+        matched scene to build a plan against.
+        """
         ev = self.concept_evidence(concept, required_evidence=required_evidence)
-        if not ev["requested_refs"]:
+        if not ev["claim_refs"]:
             return False
-        if not ev["matched_refs"]:
+        if ev["claim_ratio"] < min_coverage:
             return False
-        return ev["coverage_ratio"] >= min_coverage
+        if not ev["supporting_scene_ids"]:
+            return False
+        return True
 
     # -- Plan evidence strategy ----------------------------------------------
 
@@ -379,7 +410,9 @@ class EvidenceAnalyzer:
             lines.append("- (not specified)")
         lines.append("")
         lines.append(f"Evidence coverage: {ev['coverage']} "
-                     f"({ev['matched_claims']}/{max(1, len(ev['requested_refs']))} refs matched)")
+                     f"({ev['matched_claims']}/{max(1, len(ev['requested_refs']))} refs matched); "
+                     f"claim coverage: {ev['claim_coverage']} "
+                     f"({ev['claim_matched']}/{max(1, len(ev['claim_refs']))})")
         if ev["missing_refs"]:
             lines.append("Missing evidence (NOT in the movie):")
             for ref in ev["missing_refs"]:

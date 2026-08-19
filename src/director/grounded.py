@@ -267,15 +267,20 @@ class MovieGroundedDirector:
         prompt = build_plan_prompt(plan_ctx, duration_sec=duration_sec)
         plan = parse_plan(self.llm(prompt)) or {}
         self.stats["llm_calls"] += 1
-        plan.setdefault("concept", {})
         plan.setdefault("format", {"type": "short_video_essay",
                                    "duration_sec": duration_sec})
         plan.setdefault("editorial_direction", {})
+        # The plan is FOR the selected concept: its concept block is fixed and
+        # deterministic (never re-imagined by the model). The model only
+        # contributes format + editorial_direction, grounded in the evidence
+        # scenes below.
+        plan["concept"] = {
+            "title": selected.get("title", ""),
+            "hook": selected.get("hook", ""),
+            "thesis": selected.get("thesis", ""),
+        }
         # The evidence_strategy is deterministic, not model-invented.
         plan["evidence_strategy"] = evidence_strategy
-        # Alias for any existing downstream consumer (no duplicate schema).
-        plan["concept"].setdefault("thesis",
-                                   selected.get("thesis") or plan["concept"].get("thesis", ""))
         return plan
 
     def _store_in_memory(self, selected: Dict[str, Any], movie_metadata: Dict[str, Any]) -> None:

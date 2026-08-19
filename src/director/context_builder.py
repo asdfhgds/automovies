@@ -16,6 +16,7 @@ Both are deterministic. No LLM calls happen here.
 """
 from typing import Dict, Any, List, Optional, Tuple
 
+from director.concepts import concept_refs, render_ref
 from director.scene_facts import SceneFacts, _as_list
 
 
@@ -210,11 +211,18 @@ class DirectorContextBuilder:
         if not selected:
             selected = list(scene_facts.scenes)
         scene_blob = "\n\n".join(scene_summary(sf, i) for i, sf in enumerate(selected))
+        ref_lines = "\n".join(
+            f"- {render_ref(r)} ({r.get('kind')})"
+            for r in concept_refs(concept)
+        ) or "- (none)"
         return (
             f"## SELECTED CONCEPT\n"
             f"Title: {concept.get('title', '')}\n"
             f"Hook: {concept.get('hook', '')}\n"
             f"Thesis: {concept.get('thesis', '')}\n"
+            "\n"
+            f"## GROUNDED EVIDENCE REFS (already verified against the movie)\n"
+            f"{ref_lines}\n"
             "\n"
             f"## EVIDENCE SCENES (the Only proven scenes)\n{scene_blob}"
         )
