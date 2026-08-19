@@ -20,6 +20,8 @@ CROSSFADE_SEC = 0.6
 FADE_SEC = 0.5
 CUT_SEC = 0.04          # imperceptible dissolve = hard cut in the xfade chain
 
+MAX_EXCERPTS_PER_SEGMENT = 6
+
 ExcerptFactory = Callable[[str, float, float, str, bool], Path]
 
 
@@ -31,7 +33,13 @@ def default_excerpt_factory(source: str, start: float, end: float,
 
 
 class EditorialTimelineBuilder:
-    """Builds the editorial timeline JSON + extracts excerpt clips."""
+    """Builds the editorial timeline JSON + extracts excerpt clips.
+
+    Allocates enough distinct short excerpt windows to cover every narration
+    window (up to ``max_excerpt_sec`` each). If a segment cannot be visually
+    covered, the timeline records the deficit so the renderer's coverage
+    validator fails the pipeline instead of silently stretching/padding.
+    """
 
     def __init__(self, source_path: Optional[str] = None,
                  excerpt_factory: Optional[ExcerptFactory] = None,
@@ -60,23 +68,45 @@ class EditorialTimelineBuilder:
         segments_out = []
         video_items = []
         text_items = []
+        total_coverage = 0.0
         for seg in plan.segments:
             section = sections.get(seg.id, {})
             narration_start = float(section.get("narration_start_sec", 0.0))
             narration_dur = float(section.get("narration_duration_sec", 1.0))
-            n_ev = max(1, len(seg.evidence))
-            per = max(self.min_excerpt_sec, min(self.max_excerpt_sec, narration_dur / n_ev))
+            budget = max(0.0, narration_dur)
 
-            seg_clips = []
-            for idx, evidence in enumerate(seg.evidence[:2]):
+            # Distinct evidence windows to draw from (deduplicated).
+            windows = _dedupe_windows(seg.evidence)
+
+            # Allocate windows until the narration budget is visually covered.
+            # Each window is at most ``max_excerpt_sec`` long (short excerpts,
+            # never the whole scene). Extra windows keep the edit moving.
+            chosen = []
+            covered = 0.0
+            for evidence in windows:
+                if len(chosen) >= MAX_EXCERPTS_PER_SEGMENT:
+                    break
                 start = float(evidence.start_sec)
-                end = min(float(evidence.end_sec), start + per)
+                want = min(self.max_excerpt_sec, max(
+                    self.min_excerpt_sec, budget - covered))
+                end = min(float(evidence.end_sec), start + want)
                 if source_duration is not None:
                     end = min(end, source_duration)
                 if end - start < self.min_excerpt_sec:
                     continue
                 if source_duration is not None and start >= source_duration:
                     continue
+                chosen.append({
+                    "evidence": evidence, "start": start, "end": end,
+                })
+                covered += end - start
+                if covered >= budget - 1e-6:
+                    break
+
+            seg_clips = []
+            for idx, c in enumerate(chosen):
+                evidence = c["evidence"]
+                start, end = c["start"], c["end"]
                 out_path = excerpts_dir / f"{seg.id}-{idx}.mp4"
                 extracted = False
                 if source and Path(source).exists():
@@ -87,6 +117,7 @@ class EditorialTimelineBuilder:
                     extracted = True
                 dur = _transformed_duration(end - start,
                                             seg.editing.speed, seg.editing.hold_sec)
+                total_coverage += dur
                 seg_clips.append({
                     "excerpt_index": idx,
                     "source_scene": evidence.scene_id,
@@ -115,6 +146,7 @@ class EditorialTimelineBuilder:
             if not seg_clips:
                 continue
 
+            uncovered = max(0.0, budget - covered)
             segments_out.append({
                 "seg_id": seg.id,
                 "purpose": seg.purpose,
@@ -125,6 +157,8 @@ class EditorialTimelineBuilder:
                     "duration_sec": round(narration_dur, 3),
                 },
                 "video": seg_clips,
+                "visual_coverage_sec": round(covered, 3),
+                "narration_uncovered_sec": round(uncovered, 3),
                 "audio": {
                     "duck_level": seg.editing.duck_level,
                     "mute_film": seg.editing.mute_film_audio,
@@ -150,6 +184,7 @@ class EditorialTimelineBuilder:
             "narration_total_sec": round(narration_total, 3),
             "source_path": source,
             "segments": segments_out,
+            "movie_audio": _movie_audio_defaults(),
             "tracks": {
                 "video": {
                     "type": "video",
@@ -196,6 +231,29 @@ def _movie_source(project_dir: Path) -> Optional[str]:
     return meta.get("source_path")
 
 
+def _evidence_attr(e, name: str, default):
+    """Read an attribute from an :class:`EditorialEvidence` dataclass or a dict."""
+    if isinstance(e, dict):
+        return e.get(name, default)
+    return getattr(e, name, default)
+
+
+def _dedupe_windows(evidence: List) -> List:
+    """Deduplicate evidence windows by (scene,start,end) so the same excerpt is
+    never used twice within one segment without an editorial reason."""
+    seen = set()
+    out = []
+    for e in evidence:
+        key = (str(_evidence_attr(e, "scene_id", "")),
+               round(float(_evidence_attr(e, "start_sec", 0)), 3),
+               round(float(_evidence_attr(e, "end_sec", 0)), 3))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    return out
+
+
 def _narration_total(plan: EditorialPlan, sections: Dict[str, dict]) -> float:
     total = 0.0
     for seg in plan.segments:
@@ -204,6 +262,17 @@ def _narration_total(plan: EditorialPlan, sections: Dict[str, dict]) -> float:
                        seg.narration.text.count(" ") / 2.0 or 1.0))
         total += float(seg.narration.delivery.pause_after or 0.0)
     return max(1.0, round(total, 3))
+
+
+def _movie_audio_defaults() -> dict:
+    """Explicit movie-audio contract: preserve the movie's own soundtrack by
+    default and duck it under the narration. Never silently strip it."""
+    import os
+    return {
+        "enabled": os.getenv("MOVIE_AUDIO_ENABLED", "true").lower() != "false",
+        "gain_db": float(os.getenv("MOVIE_AUDIO_GAIN_DB", "-6.0")),
+        "duck_under_narration": os.getenv("MOVIE_AUDIO_DUCK", "true").lower() != "false",
+    }
 
 
 def editorial_timeline_excerpts(timeline: dict) -> List[str]:

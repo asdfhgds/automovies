@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import sys
 import uuid
 from pathlib import Path
 from app.orchestrator import start_pipeline
@@ -9,6 +10,28 @@ from utils.io import ensure_dirs, write_json
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = ROOT / "data"
+
+# Shipping-verdict exit codes (enforced by the CLI after the pipeline runs).
+EXIT_PASS = 0
+EXIT_UNKNOWN = 1   # status missing/unparseable -> fail closed
+EXIT_REVISE = 2
+EXIT_FAIL = 3
+
+
+def exit_code_for(status) -> int:
+    """Map a pipeline status to the CLI exit code.
+
+    PASS ships (0); REVISE and FAIL do NOT ship (2 / 3); anything unreadable
+    fails closed (1). A non-zero exit is what makes the verdict enforceable in
+    scripts/CI: the process refuses to claim a completed run is shippable.
+    """
+    if status == "PASS":
+        return EXIT_PASS
+    if status == "REVISE":
+        return EXIT_REVISE
+    if status == "FAIL":
+        return EXIT_FAIL
+    return EXIT_UNKNOWN
 
 
 def init_project(args):
@@ -89,8 +112,12 @@ def run(args):
         return 1
     if not meta.get('source_path'):
         print("Warning: No source video registered for this project. Some stages will be skipped until a source is provided.")
-    start_pipeline(project_id)
-    return 0
+    manifest = start_pipeline(project_id) or {}
+    status = manifest.get('pipeline_status')
+    print(f"pipeline_status = {status}")
+    for reason in manifest.get('pipeline_status_reasons', []):
+        print(f"  - {reason}")
+    return exit_code_for(status)
 
 
 def main():
@@ -122,7 +149,9 @@ def main():
     if args.cmd == 'init':
         init_project(args)
     elif args.cmd == 'run':
-        run(args)
+        # The pipeline verdict is the exit status: PASS ships (0), anything
+        # else fails the CLI so scripts/CI cannot treat a bad cut as complete.
+        sys.exit(run(args))
     elif args.cmd == 'benchmark-tts':
         benchmark_tts(args)
     elif args.cmd == 'doctor':

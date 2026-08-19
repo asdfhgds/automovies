@@ -48,7 +48,9 @@ def test_editorial_pipeline_produces_valid_render(tmp_path):
     from editorial.render import assemble_editorial
 
     source = tmp_path / "movie.mp4"
-    _make_source(source, duration=12.0)
+    # The fixture scenes span 0..24s, so the source must contain them or the
+    # multi-scene gate (>=3 distinct excerpts) legitimately fails.
+    _make_source(source, duration=30.0)
     seed_project(tmp_path)
     _make_voice(tmp_path / "audio" / "voice.wav", duration=8.0)
     (tmp_path / "project_meta.json").write_text(

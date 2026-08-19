@@ -157,13 +157,102 @@ def run_qc(project_dir: Path):
 
     checks['tts_benchmark'] = (project_dir / 'reports' / 'tts_benchmark.json').exists()
 
+    # --- P0 render-stability checks (fail closed) ---
+    # 1. TTS input contract: narration_inputs.json proves the provider received
+    #    only sanitized narration (source == narration_extractor).
+    from audio.narration_contract import (
+        NarrationSanitizationError,
+        build_tts_inputs,
+    )
+    tts_input_ok = True
+    narration_inputs_path = project_dir / 'audio' / 'narration_inputs.json'
+    if narration_inputs_path.exists():
+        try:
+            ni = json.loads(narration_inputs_path.read_text(encoding='utf-8'))
+            contract_ok = bool(ni.get('schema') == 'tts_input_contract_v1')
+            count = int(ni.get('count', 0))
+            checks['tts_input_count'] = count
+            tts_input_ok = contract_ok and count > 0
+        except Exception:
+            tts_input_ok = False
+    else:
+        # Reject silently leaked scripts even if the artifact is absent.
+        script_file = project_dir / 'script.json'
+        if script_file.exists():
+            try:
+                build_tts_inputs(json.loads(script_file.read_text(encoding='utf-8')))
+                checks['tts_input_count'] = 0
+            except (NarrationSanitizationError, ValueError):
+                tts_input_ok = False
+        else:
+            tts_input_ok = False
+    checks['tts_input'] = tts_input_ok
+
+    # 2. Post-render black-frame + duration + stream validation.
+    from render.validate import (
+        RenderValidationError,
+        qc_black_threshold,
+        validate_render_file,
+    )
+    render_ok = True
+    try:
+        post = validate_render_file(
+            render, require_audio=True,
+            max_black_sec=qc_black_threshold(),
+        )
+        checks['render_black'] = True
+        checks['render_frames'] = post.frames
+        checks['black_segments_sec'] = [round(b, 3) for b in post.black_segments_sec]
+        checks['black_frame_check'] = True
+    except RenderValidationError:
+        checks['render_black'] = False
+        checks['black_frame_check'] = False
+        render_ok = False
+
+    # 3. Timeline coverage + multi-scene + script->timeline contract.
+    editorial_timeline_path = project_dir / 'timeline' / 'editorial_timeline.json'
+    coverage_ok = True
+    if editorial_timeline_path.exists():
+        try:
+            from render.validate import (
+                validate_multi_scene,
+                validate_script_timeline_mapping,
+                validate_timeline_coverage,
+            )
+            tl = json.loads(editorial_timeline_path.read_text(encoding='utf-8'))
+            cov = validate_timeline_coverage(tl)
+            checks['timeline_coverage_seconds'] = round(cov.visual_coverage, 3)
+            checks['timeline_uncovered_seconds'] = round(cov.uncovered_seconds, 3)
+            checks['timeline_coverage'] = True
+            if (project_dir / 'script.json').exists():
+                validate_script_timeline_mapping(
+                    json.loads((project_dir / 'script.json').read_text(encoding='utf-8')),
+                    tl,
+                )
+                checks['script_timeline'] = True
+            try:
+                validate_multi_scene(tl)
+                checks['multi_scene'] = True
+            except RenderValidationError:
+                checks['multi_scene'] = False
+                coverage_ok = False
+        except RenderValidationError:
+            checks['timeline_coverage'] = False
+            coverage_ok = False
+    else:
+        checks['timeline_coverage'] = None
+        checks['multi_scene'] = None
+        checks['script_timeline'] = None
+
     report = {
         'project': str(project_dir.name),
         'checks': checks,
         'passed': all(
             v is True for k, v in checks.items()
             if k.startswith(('director', 'script', 'scene', 'assets', 'render', 'selected',
-                             'narration_real_tts', 'no_clipping', 'tts_benchmark', 'editorial'))
+                             'narration_real_tts', 'no_clipping', 'tts_benchmark', 'editorial',
+                             'tts_input', 'black_frame', 'timeline_coverage', 'multi_scene',
+                             'script_timeline'))
         ),
     }
     out = project_dir / 'reports'

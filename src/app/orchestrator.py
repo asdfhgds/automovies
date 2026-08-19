@@ -459,6 +459,33 @@ def start_pipeline(project_id: str):
     except Exception as e:
         print(f"QC failed: {e}")
 
+    # Phase: Production status (P0 pipeline truthfulness). A completed run must
+    # not be treated as publishable when a gate fails, so the status object is
+    # persisted for every production run at reports/pipeline_status.json.
+    try:
+        from quality.pipeline_status import save_pipeline_status, PASS as _PASS
+        pstatus = save_pipeline_status(project_dir)
+        print(f"Pipeline status: {pstatus.status}")
+        if pstatus.reasons:
+            for reason in pstatus.reasons:
+                print(f"  - {reason}")
+        report_status = None
+        if 'report' in locals() and isinstance(report, dict):
+            report_status = report.get('passed')
+        manifest['pipeline_status'] = pstatus.status
+        manifest['pipeline_status_path'] = str(project_dir / 'reports' / 'pipeline_status.json')
+        manifest['pipeline_status_reasons'] = list(pstatus.reasons)
+        manifest['qc_passed'] = bool(report_status)
+        dl_path = project_dir / 'editorial_decisions.json'
+        if dl_path.exists():
+            try:
+                manifest['editorial_decisions'] = len(
+                    json.loads(dl_path.read_text(encoding='utf-8')).get('decisions', []))
+            except Exception:
+                manifest['editorial_decisions'] = None
+    except Exception as e:
+        print(f"Pipeline status evaluation failed: {e}")
+
     manifest['pipeline_total_seconds'] = round(time.monotonic() - pipeline_t0, 2)
     manifest_path = project_dir / 'provider_manifest.json'
     manifest_path.write_text(
@@ -466,7 +493,9 @@ def start_pipeline(project_id: str):
         encoding='utf-8',
     )
     print(f"Provider manifest written -> {manifest_path}")
-    print("Pipeline completed. Check data/<project_id>/renders and /reports.")
+    print(f"Pipeline completed. status={manifest.get('pipeline_status', 'unknown')} "
+          f"-> data/{project_id}/renders and /reports.")
+    return manifest
 
 
 def _director_config():

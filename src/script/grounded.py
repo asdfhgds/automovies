@@ -234,40 +234,40 @@ class GroundedScriptGenerator:
             },
             {
                 "type": "setup",
-                "narration": build_setup_narration(_supporting(0), thesis),
-                "scene_ids": [_supporting(0)["scene_id"]],
+                "narration": build_setup_narration(_supporting(1), thesis),
+                "scene_ids": [_supporting(1)["scene_id"]],
                 "evidence_ids": [evidence[0]["id"]] if evidence else [],
-                "narrative_evidence": [_anchor(_supporting(0))],
-                "anchor": _supporting(0),
+                "narrative_evidence": [_anchor(_supporting(1))],
+                "anchor": _supporting(1),
             },
             {
                 "type": "claim",
                 "narration": build_claim_narration(thesis),
-                "scene_ids": [_supporting(0)["scene_id"]],
+                "scene_ids": [_supporting(2)["scene_id"]],
                 "evidence_ids": [evidence[0]["id"]] if evidence else [],
-                "narrative_evidence": [_anchor(_supporting(0))],
-                "anchor": _supporting(0),
+                "narrative_evidence": [_anchor(_supporting(2))],
+                "anchor": _supporting(2),
             },
             {
                 "type": "evidence",
-                "narration": build_evidence_narration(_supporting(0), evidence[0]["claim"] if evidence else ""),
-                "scene_ids": [_supporting(0)["scene_id"]],
+                "narration": build_evidence_narration(_supporting(3), evidence[0]["claim"] if evidence else ""),
+                "scene_ids": [_supporting(3)["scene_id"]],
                 "evidence_ids": [evidence[0]["id"]] if evidence else [],
-                "narrative_evidence": [_anchor(_supporting(0))],
-                "anchor": _supporting(0),
+                "narrative_evidence": [_anchor(_supporting(3))],
+                "anchor": _supporting(3),
             },
             {
                 "type": "interpretation",
-                "narration": build_interpretation_narration(_supporting(0), thesis, why),
-                "scene_ids": [_supporting(0)["scene_id"]],
+                "narration": build_interpretation_narration(_supporting(4), thesis, why),
+                "scene_ids": [_supporting(4)["scene_id"]],
                 "evidence_ids": [evidence[0]["id"]] if evidence else [],
-                "narrative_evidence": [_anchor(_supporting(0))],
-                "anchor": _supporting(0),
+                "narrative_evidence": [_anchor(_supporting(4))],
+                "anchor": _supporting(4),
             },
         ]
 
         if len(supporting) > 1:
-            scene = _supporting(1)
+            scene = _supporting(5)
             plan.append({
                 "type": "second_evidence",
                 "narration": build_evidence_narration(scene, evidence[1]["claim"] if len(evidence) > 1 else ""),
@@ -280,10 +280,10 @@ class GroundedScriptGenerator:
         plan.append({
             "type": "deeper_implication",
             "narration": build_implication_narration(why, thesis),
-            "scene_ids": [opening["scene_id"]],
+            "scene_ids": [_supporting(0)["scene_id"]],
             "evidence_ids": [],
-            "narrative_evidence": [_anchor(opening)],
-            "anchor": opening,
+            "narrative_evidence": [_anchor(_supporting(0))],
+            "anchor": _supporting(0),
         })
         plan.append({
             "type": "conclusion",
@@ -339,11 +339,16 @@ class GroundedScriptGenerator:
 # Cautious, fact-grounded narration templates (no invented detail)
 # --------------------------------------------------------------------------- #
 
-def _cautious_scene_line(scene: Dict[str, Any], scene_id: str) -> str:
+def _cautious_scene_line(scene: Dict[str, Any]) -> str:
+    """A narration-safe one-liner for one scene, built only from real facts.
+
+    NEVER includes the internal ``scene_id`` (that is metadata, not narration).
+    If no verifiable visual fact exists, describe the moment without the id.
+    """
     text = _scene_text(scene)
     if text:
-        return f"In {scene_id}, {text}"
-    return f"the moment captured in {scene_id}"
+        return text
+    return "the moment captured on screen"
 
 
 def build_hook_narration(hook: str, thesis: str) -> str:
@@ -355,7 +360,7 @@ def build_hook_narration(hook: str, thesis: str) -> str:
 
 
 def build_setup_narration(scene: Dict[str, Any], thesis: str) -> str:
-    line = _cautious_scene_line(scene, scene.get("scene_id", ""))
+    line = _cautious_scene_line(scene)
     return f"{line.capitalize()} This is where the film begins to set up its central question."
 
 
@@ -367,14 +372,14 @@ def build_claim_narration(thesis: str) -> str:
 
 
 def build_evidence_narration(scene: Dict[str, Any], claim: str) -> str:
-    line = _cautious_scene_line(scene, scene.get("scene_id", ""))
+    line = _cautious_scene_line(scene)
     if claim:
         return f"We can test the claim against the footage directly. {line.capitalize()} {claim}."
     return f"We can test the claim against the footage directly. {line.capitalize()}"
 
 
 def build_interpretation_narration(scene: Dict[str, Any], thesis: str, why: str) -> str:
-    line = _cautious_scene_line(scene, scene.get("scene_id", ""))
+    line = _cautious_scene_line(scene)
     return f"{line.capitalize()} Understood this way, the scene gives the thesis its weight."
 
 

@@ -138,16 +138,17 @@ def _plan_director_deterministic(project_dir: Path, title: str = None) -> Path:
             chosen_scene = None
 
     # build a deterministic thesis
+    # NOTE: the thesis is later (re)written into spoken narration, so it must
+    # never embed internal identifiers (scene_id). Use neutral prose instead.
     if chosen_scene:
-        scene_id = chosen_scene.get('scene_id', 'scene_unknown')
         transcript = chosen_scene.get('transcript', '')
         keywords = _most_common_keywords(transcript, n=3)
         if keywords:
-            thesis_text = f"Explore how {' / '.join(keywords)} shape the emotional arc of {scene_id}."
+            thesis_text = "Explore how " + " / ".join(keywords) + " shape the emotional arc of the story."
         else:
             # fallback to short excerpt
             excerpt = ' '.join(transcript.split()[:8])
-            thesis_text = f"Analyze the moment in {scene_id}: '{excerpt}'."
+            thesis_text = f"Analyze the moment this story lingers on: '{excerpt}'."
     else:
         thesis_text = title or 'A focused analysis of a key scene.'
 

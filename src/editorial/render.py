@@ -207,7 +207,13 @@ def build_editorial_srt(script: dict, output_path: Path) -> bool:
 
 
 def assemble_editorial(project_dir: Path) -> Path:
-    """Render the editorial cut -> renders/final_render.mp4 (+ render_job.json)."""
+    """Render the editorial cut -> renders/final_render.mp4 (+ render_job.json).
+
+    Production guardrails: validates every visual segment BEFORE ffmpeg (a bad
+    asset fails the pipeline — no black placeholder, no silent skip), validates
+    timeline coverage, then validates the finished render (playable + no long
+    black intervals). Writes the production segment manifest + render_job.json.
+    """
     import json
     import shutil
     import subprocess
@@ -215,7 +221,13 @@ def assemble_editorial(project_dir: Path) -> Path:
     from editor.ffmpeg_editor import (
         _burn_subtitles_supported,
         _find_music,
-        _render_job,
+    )
+    from render.validate import (
+        RenderValidationError,
+        validate_multi_scene,
+        validate_render_file,
+        validate_timeline_coverage,
+        validate_visual_segments,
     )
     from movie_understanding import movie_memory
 
@@ -230,6 +242,29 @@ def assemble_editorial(project_dir: Path) -> Path:
     if not voice.exists():
         raise FileNotFoundError("Voiceover audio not found — run TTS before assembling")
 
+    # ---- PRE-RENDER VALIDATION (fail closed, before any ffmpeg) ----
+    try:
+        validated = validate_visual_segments(timeline)
+    except RenderValidationError as e:
+        raise RenderValidationError(
+            f"PIPELINE FAILS: pre-render visual validation rejected the timeline. {e}"
+        ) from e
+
+    min_visuals = _minimum_visual_segments(project_dir)
+    try:
+        validate_multi_scene(timeline, minimum_segments=min_visuals)
+    except RenderValidationError as e:
+        raise RenderValidationError(
+            f"PIPELINE FAILS: multi-scene validation failed. {e}"
+        ) from e
+
+    try:
+        coverage = validate_timeline_coverage(timeline)
+    except RenderValidationError as e:
+        raise RenderValidationError(
+            f"PIPELINE FAILS: timeline coverage failed. {e}"
+        ) from e
+
     # Reconcile narration pacing with the REAL synthesized voice: the plan only
     # estimates narration length, but the final mix must span the actual speech
     # so the narration is never clipped mid-sentence.
@@ -240,6 +275,7 @@ def assemble_editorial(project_dir: Path) -> Path:
     if real_voice_sec > float(timeline.get("narration_total_sec", 0.0)):
         timeline["narration_total_sec"] = round(real_voice_sec, 3)
         timeline["total_duration_sec"] = round(real_voice_sec, 3)
+        timeline["movie_audio"] = _movie_audio_config(project_dir)
         _mm.save_json(project_dir, "timeline/editorial_timeline.json", timeline)
         print(f"Editorial: narration total reconciled to real voice ({real_voice_sec:.1f}s)")
 
@@ -306,6 +342,16 @@ def assemble_editorial(project_dir: Path) -> Path:
     if not out_file.exists() or out_file.stat().st_size == 0:
         raise RuntimeError("ffmpeg did not produce a render")
 
+    # ---- POST-RENDER VALIDATION (fail closed: playable, not black) ----
+    try:
+        post = validate_render_file(
+            out_file, require_audio=True,
+            max_black_sec=float(__import__("os").getenv("QC_MAX_BLACK_SEGMENT_SECONDS", "2.0")),
+        )
+        post_status = post.status
+    except RenderValidationError as e:
+        raise RenderValidationError(f"QC FAIL after render: {e}") from e
+
     job = {
         "project_id": project_dir.name,
         "status": "done",
@@ -324,6 +370,7 @@ def assemble_editorial(project_dir: Path) -> Path:
             "music_ducking": render_info.get("music_used", False),
             "normalization": render_info.get("normalization"),
             "no_clipping": True,
+            "movie_audio": timeline.get("movie_audio"),
         },
         "export": {
             "format": "mp4",
@@ -332,12 +379,145 @@ def assemble_editorial(project_dir: Path) -> Path:
             "audio_sample_rate": AUDIO_SR,
             "output_path": str(out_file),
         },
+        "validation": {
+            "pre_render": {
+                "visual_segments": len(validated),
+                "multi_scene_min": min_visuals,
+                "coverage": coverage.to_dict(),
+            },
+            "post_render": post.to_dict(),
+        },
         "timeline_path": str(project_dir / "timeline" / "editorial_timeline.json"),
     }
     (renders_dir / "render_job.json").write_text(
         json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_segment_manifest(project_dir, timeline, voice)
     print(f"Assembled editorial render -> {out_file}")
     return out_file
+
+
+def _movie_audio_config(project_dir: Path) -> dict:
+    """Explicit movie-audio contract for the timeline (never strip by default)."""
+    import os
+    return {
+        "enabled": os.getenv("MOVIE_AUDIO_ENABLED", "true").lower() != "false",
+        "gain_db": float(os.getenv("MOVIE_AUDIO_GAIN_DB", "-6.0")),
+        "duck_under_narration": os.getenv("MOVIE_AUDIO_DUCK", "true").lower() != "false",
+    }
+
+
+def _minimum_visual_segments(project_dir: Path) -> int:
+    """The minimum distinct visual sources required before rendering.
+
+    Prefers the director's ``minimum_visual_segments`` (when declared in the
+    editorial plan / director plan), then the plan's distinct evidence scenes,
+    then the env override, then a sane floor of 3. Silent clip repetition is
+    never used to pad toward this number.
+    """
+    import os
+    cp = Path(project_dir)
+    plans = [
+        ("editorial_plan.json", None),
+        ("director_plan.json", None),
+    ]
+    plan_scenes: set = set()
+    for rel, _ in plans:
+        p = cp / rel
+        if not p.exists():
+            continue
+        try:
+            import json as _json
+            data = _json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if rel.startswith("editorial"):
+            for seg in data.get("segments") or []:
+                for ev in seg.get("evidence") or []:
+                    sid = ev.get("scene_id")
+                    if sid:
+                        plan_scenes.add(sid)
+        else:
+            for sc in data.get("supporting_scenes") or []:
+                sid = sc.get("scene_id")
+                if sid:
+                    plan_scenes.add(sid)
+    declared = None
+    for rel, _ in plans:
+        p = cp / rel
+        if p.exists():
+            try:
+                import json as _json
+                data = _json.loads(p.read_text(encoding="utf-8"))
+                declared = data.get("minimum_visual_segments")
+                if declared:
+                    break
+            except Exception:
+                continue
+    env_val = os.getenv("MIN_VISUAL_SEGMENTS", "")
+    if env_val.strip():
+        try:
+            env_int = int(env_val)
+            return max(1, env_int)
+        except ValueError:
+            pass
+    if declared:
+        try:
+            return max(1, int(declared))
+        except (TypeError, ValueError):
+            pass
+    if plan_scenes:
+        return max(3, len(plan_scenes))
+    return 3
+
+
+def _write_segment_manifest(project_dir: Path, timeline: dict, voice: Path) -> Path:
+    """Production render manifest: every cut segment maps narration->TTS->timeline.
+
+    Fields: segment_id, narration section, tts file, timeline start/end, each
+    visual clip (scene, source window, extracted duration), render status.
+    """
+    import json
+    import os
+    from pathlib import Path as _P
+
+    segments = []
+    cursor = 0.0
+    for seg in timeline.get("segments", []):
+        narration = seg.get("narration") or {}
+        n_start = float(narration.get("start_sec", cursor))
+        n_end = float(narration.get("end_sec", n_start))
+        seg_entry = {
+            "segment_id": seg.get("seg_id"),
+            "narration_section": seg.get("seg_id"),
+            "tts_file": str(_P(project_dir) / "audio" / "voice.wav"),
+            "timeline_start": round(n_start, 3),
+            "timeline_end": round(n_end, 3),
+            "status": "rendered",
+            "visuals": [
+                {
+                    "scene_id": v.get("source_scene"),
+                    "source_start": v.get("source_start_sec"),
+                    "source_end": v.get("source_end_sec"),
+                    "extracted_duration": v.get("duration_sec"),
+                    "content_path": v.get("content_path"),
+                }
+                for v in seg.get("video", [])
+            ],
+        }
+        segments.append(seg_entry)
+        cursor = n_end
+
+    manifest = {
+        "project_id": str(project_dir.name),
+        "render_path": str(_P(project_dir) / "renders" / "final_render.mp4"),
+        "voice_path": str(voice),
+        "segments": segments,
+        "status": "done",
+    }
+    out = _P(project_dir) / "renders" / "segment_manifest.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
 
 
 def _only_cuts(timeline: dict) -> dict:

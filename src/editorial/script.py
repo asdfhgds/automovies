@@ -76,6 +76,12 @@ def build_editorial_script(project_dir: Path, plan: EditorialPlan,
     for seg in plan.segments:
         all_texts.append(seg.narration.text)
 
+    # Deduplicate the hook: the plan's hook.text is also carried by the first
+    # hook segment, and the grounded path already emits a dedicated "hook"
+    # section. Speaking it twice is a bug.
+    if len(all_texts) >= 2 and all_texts[0] == all_texts[1]:
+        all_texts.pop(0)
+
     voiceover_text = " ".join(all_texts)
 
     for idx, seg in enumerate(plan.segments):

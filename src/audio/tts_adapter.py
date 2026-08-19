@@ -65,9 +65,29 @@ def synthesize_voice(project_dir: Path, script_path: str = None):
     if not script_file.exists():
         raise FileNotFoundError(f"Script not found: {script_file}")
     script = json.loads(script_file.read_text(encoding="utf-8"))
-    text = script.get("voiceover_text", "").strip()
-    if not text:
-        raise ValueError("Script contains no voiceover_text")
+
+    # Narration Extractor (TTS input contract): the provider MUST receive only
+    # plain narration. This step validates every section's narration text and
+    # rejects empty/JSON/artefact-laden/debug text (fail closed).
+    from audio.narration_contract import (
+        NarrationSanitizationError,
+        build_tts_inputs,
+        joint_text,
+        sanitize_narration,
+        write_tts_input_manifest,
+    )
+    try:
+        inputs = build_tts_inputs(script)
+    except NarrationSanitizationError as e:
+        raise ValueError(
+            f"TTS FAIL-CLOSED: narration sanitization rejected the script. {e}"
+        ) from e
+    text = joint_text(inputs)
+    if not text.strip():
+        raise ValueError("TTS FAIL-CLOSED: narration extractor produced empty text")
+    # final belt-and-braces: never synthesize raw director/script blobs.
+    sanitize_narration(text, "voiceover", raise_on_error=True)
+    write_tts_input_manifest(project_dir, inputs)
 
     config = _tts_config()
     provider = load_tts_provider(config)
@@ -107,6 +127,12 @@ def synthesize_voice(project_dir: Path, script_path: str = None):
         "narration_properties": narration,
         "mock": bool(result.get("mock", False)),
         "text": text,
+        "tts_input_contract": {
+            "source": "narration_extractor",
+            "sections": [i.section_id for i in inputs],
+            "schema": "tts_input_contract_v1",
+            "manifest": str(out_dir / "narration_inputs.json"),
+        },
     }
     meta_path = out_dir / 'tts_meta.json'
     with meta_path.open('w', encoding='utf-8') as f:

@@ -92,20 +92,28 @@ def test_orchestrator_editorial_mode_produces_expected_artifacts(tmp_path, monke
                     "source_path": str(source)}), encoding="utf-8")
     _seed_fixture(project_dir)
 
-    orch.start_pipeline("proj-1")
+    manifest = orch.start_pipeline("proj-1")
 
     essentials = [
         "director_plan.json",
         "editorial_plan.json",
+        "editorial_decisions.json",
         "script.json",
         "movie_index.json",
         "timeline/editorial_timeline.json",
         "renders/final_render.mp4",
         "provider_manifest.json",
         "reports/qc_report.json",
+        "reports/pipeline_status.json",
     ]
     for rel in essentials:
         assert (project_dir / rel).exists(), f"missing artifact: {rel}"
+
+    # Editorial decision list: real, deliberated decisions (schema v1 dict).
+    decisions = json.loads((project_dir / "editorial_decisions.json").read_text(encoding="utf-8"))
+    assert decisions.get("title")
+    assert isinstance(decisions.get("decisions"), list) and len(decisions["decisions"]) >= 2
+    assert all(d.get("narrative_beat") and d.get("evidence") for d in decisions["decisions"])
 
     # Editorial script shape.
     script = json.loads((project_dir / "script.json").read_text(encoding="utf-8"))
@@ -141,3 +149,17 @@ def test_orchestrator_editorial_mode_produces_expected_artifacts(tmp_path, monke
     qc = json.loads((project_dir / "reports" / "qc_report.json").read_text(encoding="utf-8"))
     assert qc["checks"]["editorial_timeline"] is True
     assert qc["checks"]["editorial_excerpts"] is True
+
+    # Production status: a completed pipeline must SPELL OUT its verdict.
+    status = json.loads((project_dir / "reports" / "pipeline_status.json").read_text(encoding="utf-8"))
+    assert status["status"] in ("PASS", "REVISE", "FAIL")
+    assert all(k in status["technical"] for k in
+               ("assets", "timeline", "render", "audio"))
+    assert isinstance(status["creative"], dict)
+    assert manifest["pipeline_status"] == status["status"]
+    assert isinstance(manifest["pipeline_status_reasons"], list)
+    assert manifest["editorial_decisions"] >= 2
+    # Truthfulness: QC refuses to claim a production PASS with mock narration,
+    # even though the technical status is PASS. Both are recorded, not hidden.
+    assert manifest["qc_passed"] is False
+    assert status["technical"]["audio"] == "PASS"
