@@ -90,6 +90,21 @@ def build_report(
             for k in ("pacing", "visual_style", "audio_style", "editing_style"):
                 if ed.get(k):
                     lines.append(_line(k.replace("_", " ").title(), ed.get(k)))
+            audit = plan.get("grounding_audit") or {}
+            if audit:
+                lines.append("")
+                lines.append("  Plan grounding audit (deterministic):")
+                lines.append(
+                    _line("Coverage", f"{audit.get('coverage', 0.0):.0%} "
+                          f"(min {audit.get('min_coverage', 0.55):.0%})"))
+                if audit.get("invented_terms"):
+                    lines.append(_line("Invented terms", ", ".join(
+                        audit["invented_terms"])))
+                if audit.get("elsewhere_terms"):
+                    lines.append(_line("Out-of-scope terms", ", ".join(
+                        audit["elsewhere_terms"])))
+                lines.append(_line("Plan grounded",
+                                   "yes" if audit.get("sufficient") else "NO"))
 
     return "\n".join(lines)
 

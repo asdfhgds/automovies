@@ -277,9 +277,27 @@ class MovieGroundedDirector:
         plan_ctx = self.context_builder.build_plan_context(
             selected, scene_facts, evidence_strategy.get("scene_ids", [])
         )
-        prompt = build_plan_prompt(plan_ctx, duration_sec=duration_sec)
-        plan = parse_plan(self.llm(prompt)) or {}
-        self.stats["llm_calls"] += 1
+        scene_ids = evidence_strategy.get("scene_ids", [])
+
+        plan = self._plan_once(plan_ctx, duration_sec)
+        # Deterministically audit the plan's editorial_direction against the
+        # evidence scenes. If the model invented concrete content (scope leak
+        # or outright hallucination), do ONE bounded corrective retry with the
+        # exact offending terms fed back — never more, never forced through.
+        audit = analyzer.plan_grounding(
+            plan.get("editorial_direction"), scene_ids,
+        )
+        if not audit["sufficient"] and audit.get("invented_terms"):
+            corrections = list(audit["invented_terms"])
+            if len(corrections) < 10 and audit.get("elsewhere_terms"):
+                corrections += list(audit["elsewhere_terms"])[: 10 - len(corrections)]
+            plan = self._plan_once(
+                plan_ctx, duration_sec, grounding_warnings=corrections,
+            )
+            audit = analyzer.plan_grounding(
+                plan.get("editorial_direction"), scene_ids,
+            )
+        plan["grounding_audit"] = audit
         plan.setdefault("format", {"type": "short_video_essay",
                                    "duration_sec": duration_sec})
         plan.setdefault("editorial_direction", {})
@@ -294,6 +312,21 @@ class MovieGroundedDirector:
         }
         # The evidence_strategy is deterministic, not model-invented.
         plan["evidence_strategy"] = evidence_strategy
+        return plan
+
+    def _plan_once(
+        self,
+        plan_ctx: str,
+        duration_sec: int,
+        grounding_warnings: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """One plan LLM call (parse-tolerant). Auditing lives in the caller."""
+        prompt = build_plan_prompt(
+            plan_ctx, duration_sec=duration_sec,
+            grounding_warnings=grounding_warnings,
+        )
+        plan = parse_plan(self.llm(prompt)) or {}
+        self.stats["llm_calls"] += 1
         return plan
 
     def _store_in_memory(self, selected: Dict[str, Any], movie_metadata: Dict[str, Any]) -> None:

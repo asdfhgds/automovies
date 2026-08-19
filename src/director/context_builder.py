@@ -284,6 +284,66 @@ class DirectorContextBuilder:
             f"- {render_ref(r)} ({r.get('kind')})"
             for r in concept_refs(concept)
         ) or "- (none)"
+
+        # Verbatim vocabulary of the EVIDENCE scenes only — the plan model may
+        # cite concrete objects/characters/locations ONLY from this list.
+        def _uniq(values):
+            seen, out = set(), []
+            for v in values:
+                key = str(v).strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    out.append(str(v).strip())
+            return out
+
+        ev_objects = _uniq(o for sf in selected for o in sf.objects)
+        ev_chars = _uniq(c for sf in selected for c in sf.characters)
+        ev_locs = _uniq(sf.location for sf in selected if sf.location)
+        ev_actions = _uniq(a for sf in selected for a in sf.actions)
+        ev_themes = _uniq(t for sf in selected for t in sf.themes)
+        ev_moods = _uniq(m for sf in selected for m in _as_list(sf.mood))
+        ev_vocab = (
+            "## VERBATIM VOCABULARY FOR THE EVIDENCE SCENES ONLY\n"
+            "You may cite concrete characters, objects, locations, actions,\n"
+            "themes, or moods ONLY if they are listed here (copy verbatim, do\n"
+            "not paraphrase or pluralize):\n"
+            f"- Characters: {', '.join(ev_chars) or '(none identified)'}\n"
+            f"- Locations: {', '.join(ev_locs) or '(none identified)'}\n"
+            f"- Objects: {', '.join(ev_objects) or '(none identified)'}\n"
+            f"- Actions: {', '.join(ev_actions) or '(none identified)'}\n"
+            f"- Themes: {', '.join(ev_themes) or '(none identified)'}\n"
+            f"- Moods: {', '.join(ev_moods) or '(none identified)'}"
+        )
+
+        # A worked, already-grounded editorial_direction example (deterministic)
+        # so the model sees the only acceptable object/mood vocabulary.
+        example_ref_lines = []
+        for sf in selected:
+            objs = [o for o in sf.objects if str(o).strip()]
+            mood = sf.mood if str(sf.mood or "").strip() else (
+                sf.themes[0] if sf.themes else "")
+            if not objs or not mood:
+                continue
+            example_ref_lines.append(
+                f"- Scene {sf.scene_id}: reference \"{objs[0]}\" and the "
+                f"\"{mood}\" mood only."
+            )
+            break
+        worked_example = ""
+        if example_ref_lines:
+            worked_example = (
+                "## WORKED EDITORIAL EXAMPLE (ALREADY GROUNDED — imitate the "
+                "restraint, write your own words)\n"
+                + "\n".join(example_ref_lines)
+                + "\n"
+                "Pacing: slow and intentional.\n"
+                "Visual style: draw on the listed objects/locations only; if a "
+                "visual is not in the vocabulary above, describe it abstractly "
+                "instead of naming a prop.\n"
+                "Audio style: minimal; no dialogue is referenced unless listed.\n"
+                "Editing style: long takes and quiet cuts.\n"
+            )
+
         return (
             f"## SELECTED CONCEPT\n"
             f"Title: {concept.get('title', '')}\n"
@@ -293,5 +353,9 @@ class DirectorContextBuilder:
             f"## GROUNDED EVIDENCE REFS (already verified against the movie)\n"
             f"{ref_lines}\n"
             "\n"
-            f"## EVIDENCE SCENES (the Only proven scenes)\n{scene_blob}"
+            f"## EVIDENCE SCENES (the Only proven scenes)\n{scene_blob}\n"
+            "\n"
+            f"{ev_vocab}\n"
+            "\n"
+            f"{worked_example}"
         )

@@ -39,6 +39,53 @@ COVERAGE_MEDIUM = "MED"
 COVERAGE_LOW = "LOW"
 
 
+#: Editorial/craft vocabulary allowed in plan ``editorial_direction`` prose.
+#: These describe HOW to cut / score / frame the essay, never claims about
+#: on-screen content, so the plan auditor must not flag them as invented.
+#: Also includes common neutral process/generic verbs and abstract staging
+#: nouns that appear in ANY editorial prose (focusing, shifts, moments, ...)
+#: regardless of the movie — only concrete content nouns get audited.
+PLAN_EDITORIAL_TERMS = frozenset({
+    "abstraction", "absence", "ambient", "angle", "angles", "artificial",
+    "atmosphere", "audio", "beat", "build", "builds", "camera", "capture",
+    "captures", "capturing", "cinematography", "close", "closeup",
+    "closeups", "color", "colour", "colours", "composition", "continuity",
+    "contrast", "contrasts", "create", "creates", "creating", "crossfade",
+    "cut", "cuts", "dark", "depth", "dialogue", "dim", "distant", "draw",
+    "draws", "drawing", "dynamic", "echo", "echoes", "edit", "editing",
+    "edits", "edges", "emphasis", "emphasize", "emphasizes", "emphasizing",
+    "enable", "enables", "enabling", "evoke", "evokes", "evoking", "extreme",
+    "fade", "fades", "focus", "focused", "focuses", "focusing", "frame",
+    "frames", "framing", "gain", "gesture", "gestures", "giving", "ground",
+    "grounded", "hard", "heighten", "heightens", "hint", "hints", "hold",
+    "holds", "holding", "imagery", "imply", "implies", "interplay",
+    "internal", "intimate", "jump", "keep", "keeps", "keeping", "layers",
+    "light", "lighting", "lights", "long", "lot", "make", "makes", "making",
+    "mark", "marks", "measured", "minimal", "moment", "moments", "mood",
+    "motion", "movement", "murmur", "music", "narration", "natural",
+    "offscreen", "off-screen", "pace", "pacing", "palette", "panel",
+    "panels", "parallel", "parallels", "pauses", "point", "points",
+    "positioning", "punctuated", "quiet", "reflect", "reflects",
+    "reflecting", "resonance", "resonates", "resonate", "reveal", "reveals",
+    "revealing", "rhythm", "root", "roots", "score", "shadow", "shadowing",
+    "shadows", "sharp", "shift", "shifts", "shifting", "shot", "shots",
+    "show", "shows", "showing", "signal", "signals", "silence", "slow",
+    "slower", "slowly", "soft", "sound", "sparse", "static", "steady",
+    "still", "stillness", "subdued", "subtle", "suggest", "suggests",
+    "suggesting", "takes", "tap", "tempo", "texture", "timing", "tone",
+    "tones", "transition", "transitions", "turn", "turns", "turning",
+    "underscore", "underscores", "underscoring", "unfolds", "unfolding",
+    "use", "uses", "using", "vast", "voice", "weave", "weaves", "wide",
+    "widescreen", "zoom",
+})
+
+#: Plural / verb-form suffixes stripped when classifying plan prose tokens so
+#: "chairs" is checked as "chair", "throwing" as "throw", etc. Ordered so the
+#: LEAST destructive removal (just "s") is tried first and kept when it yields
+#: a known form; longer suffixes are fallbacks.
+_PLAN_INFLECTION = ("s", "es", "ing", "ed")
+
+
 def _tokenize(text: str) -> List[str]:
     return re.findall(r"[a-z0-9]+", (text or "").lower())
 
@@ -338,6 +385,104 @@ class EvidenceAnalyzer:
         if not ev["supporting_scene_ids"]:
             return False
         return True
+
+    # -- Plan editorial-direction grounding audit -----------------------------
+
+    def plan_grounding(
+        self,
+        editorial_direction: Optional[Dict[str, Any]],
+        evidence_scene_ids: Optional[List[str]] = None,
+        min_coverage: float = 0.55,
+    ) -> Dict[str, Any]:
+        """Audit a plan's ``editorial_direction`` prose for invented content.
+
+        The plan stage already imposes a prompt rule ("describe only the
+        moments/objects/characters that appear in the evidence scenes"), but a
+        weak model still writes concrete claims like "empty chairs", "open
+        windows" or "the rhythm of grief". This deterministic audit token-checks
+        the prose against the evidence scenes' ACTUAL fact tokens and reports:
+
+        - ``grounded_terms``  — tokens that appear in the evidence scenes,
+        - ``elsewhere_terms`` — tokens that exist in the movie but NOT in the
+          evidence scenes (scope leak),
+        - ``invented_terms``  — tokens found in no scene at all (hallucination),
+        - ``coverage``        — grounded / (grounded + invented + elsewhere),
+        - ``sufficient``      — coverage >= ``min_coverage`` AND no invented
+          terms that are plainly unsupported.
+
+        ``min_coverage`` is a soft advisory threshold: the gate that decides
+        whether a plan is acceptable lives in the caller (bounded regeneration
+        with per-term feedback), so a single prose word never silently fails a
+        whole plan — it is surfaced and corrected.
+        """
+        ed = editorial_direction or {}
+        blob = " ".join(
+            str(v) for v in ed.values() if isinstance(v, str) and v.strip()
+        )
+        sig = significant_tokens(blob)
+        seen: List[str] = []
+        grounded: List[str] = []
+        elsewhere: List[str] = []
+        invented: List[str] = []
+
+        def _stem(token: str) -> str:
+            for suffix in _PLAN_INFLECTION:
+                if (
+                    token.endswith(suffix)
+                    and len(token) > len(suffix) + 2
+                ):
+                    return token[: -len(suffix)]
+            return token
+
+        evidence_ids = [
+            sid for sid in self.facts.used_scene_ids()
+            if not evidence_scene_ids or sid in set(evidence_scene_ids or [])
+        ]
+        evidence_tokens = set()
+        for sid in evidence_ids:
+            evidence_tokens |= self._scene_tokens.get(sid, set())
+        movie_tokens = set()
+        for sid in self.facts.used_scene_ids():
+            movie_tokens |= self._scene_tokens.get(sid, set())
+        evidence_stems = {_stem(t) for t in evidence_tokens}
+        movie_stems = {_stem(t) for t in movie_tokens}
+
+        for tok in sig:
+            if tok in seen:
+                continue
+            seen.append(tok)
+            stem = _stem(tok)
+            if stem in PLAN_EDITORIAL_TERMS or tok in PLAN_EDITORIAL_TERMS:
+                continue
+            if (
+                tok in evidence_tokens
+                or stem in evidence_tokens
+                or stem in evidence_stems
+            ):
+                grounded.append(tok)
+            elif (
+                tok in movie_tokens
+                or stem in movie_tokens
+                or stem in movie_stems
+            ):
+                elsewhere.append(tok)
+            else:
+                invented.append(tok)
+
+        denominator = max(1, len(grounded) + len(invented) + len(elsewhere))
+        coverage = round(len(grounded) / denominator, 3)
+        sufficient = (
+            coverage >= min_coverage
+            and len(invented) == 0
+        )
+        return {
+            "grounded_terms": grounded,
+            "elsewhere_terms": elsewhere,
+            "invented_terms": invented,
+            "coverage": round(coverage, 3),
+            "min_coverage": min_coverage,
+            "sufficient": bool(sufficient),
+        }
 
     # -- Plan evidence strategy ----------------------------------------------
 

@@ -14,6 +14,7 @@ from director.evidence import EvidenceAnalyzer
 from director.grounded import MovieGroundedDirector
 from director.concepts import (
     build_generation_prompt,
+    build_plan_prompt,
     build_rejection_prompt,
     parse_concepts,
     parse_plan,
@@ -188,6 +189,30 @@ class TestContextBuilder:
         assert meta.get("example_included", False) is False
         assert "## WORKED EXAMPLE" not in context
 
+    def test_plan_context_has_verbatim_vocab_and_grounded_editorial(self,
+                                                                    facts, metadata):
+        from director.concepts import concept_refs
+        concept = {
+            "title": "C1", "hook": "h", "thesis": "a grounded claim",
+            "why_interesting": "w",
+            "evidence_refs": [
+                {"kind": "scene", "scene_id": "scene-1"},
+                {"kind": "object", "value": "revolver"},
+            ],
+            "required_evidence": ["revolver", "scene-1"],
+            "visual_opportunity": "close-up", "format": "short_video_essay",
+        }
+        cb = DirectorContextBuilder()
+        ctx = cb.build_plan_context(concept, facts, ["scene-1"])
+        assert "## VERBATIM VOCABULARY FOR THE EVIDENCE SCENES ONLY" in ctx
+        assert "## WORKED EDITORIAL EXAMPLE" in ctx
+        assert "revolver" in ctx
+        assert "mirror" not in ctx  # scene-2 facts must NOT leak into scene-1
+        # The worked editorial example must not cite out-of-scope props.
+        audit = EvidenceAnalyzer(facts).plan_grounding(
+            {"visual_style": ctx}, ["scene-1"])
+        assert "mirror" not in audit["invented_terms"] + audit["elsewhere_terms"]
+
 
 # --------------------------------------------------------------------------- #
 # Scene facts / hallucination prevention
@@ -248,6 +273,52 @@ class TestEvidence:
         strat = analyzer.build_evidence_strategy(concept)
         assert "scene-1" in strat["scene_ids"]
         assert "revolver" in " ".join(strat["visual_motifs"])
+
+
+class TestPlanGroundingAudit:
+    """Deterministic audit of plan editorial_direction prose."""
+
+    def test_grounded_plan_is_sufficient(self, facts):
+        analyzer = EvidenceAnalyzer(facts)
+        ed = {
+            "pacing": "slow and measured",
+            "visual_style": "close-up on the revolver and the glass while the "
+                            "barman is talking",
+            "audio_style": "minimal",
+            "editing_style": "long takes and quiet cuts",
+        }
+        audit = analyzer.plan_grounding(ed, ["scene-1"])
+        assert audit["sufficient"] is True
+        assert audit["coverage"] >= audit["min_coverage"]
+        assert "revolver" in " ".join(audit["grounded_terms"])
+
+    def test_invented_plan_terms_flagged(self, facts):
+        analyzer = EvidenceAnalyzer(facts)
+        ed = {
+            "visual_style": "empty chairs, an open window and silhouettes in "
+                            "the saloon",
+            "editing_style": "quiet cuts",
+        }
+        audit = analyzer.plan_grounding(ed, ["scene-1"])
+        assert audit["sufficient"] is False
+        assert "chairs" in audit["invented_terms"]
+        assert "window" in audit["invented_terms"]
+        assert "silhouettes" in audit["invented_terms"]
+
+    def test_out_of_scope_terms_flagged_separately(self, facts):
+        analyzer = EvidenceAnalyzer(facts)
+        # "horse" exists in the movie but NOT in evidence scene-1.
+        ed = {"visual_style": "a lone horse in the saloon light"}
+        audit = analyzer.plan_grounding(ed, ["scene-1"])
+        assert "horse" in audit["elsewhere_terms"]
+        assert "horse" not in audit["invented_terms"]
+        assert "saloon" in audit["grounded_terms"]
+
+    def test_editorial_craft_terms_not_flagged(self, facts):
+        analyzer = EvidenceAnalyzer(facts)
+        ed = {"visual_style": "slow zooms, crossfades and minimal ambient sound"}
+        audit = analyzer.plan_grounding(ed, ["scene-1"])
+        assert audit["invented_terms"] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -315,6 +386,14 @@ class TestConcepts:
         prompt = build_rejection_prompt("CTX", rejected, substitutes_needed=1)
         assert "re-running" in prompt
         assert "Bad" in prompt
+
+    def test_plan_prompt_warns_against_invented_terms(self):
+        prompt = build_plan_prompt("CTX", grounding_warnings=["chairs", "city"])
+        assert "GROUNDING CORRECTION" in prompt
+        assert "chairs" in prompt
+        assert "city" in prompt
+        prompt2 = build_plan_prompt("CTX")
+        assert "GROUNDING CORRECTION" not in prompt2
 
 
 # --------------------------------------------------------------------------- #
@@ -467,6 +546,106 @@ class TestMovieGroundedDirector:
         assert res["selected_concept"] is None
         assert res["plan"] is None
         assert res["rejected_concepts"] == []
+
+    def test_plan_with_invented_editorial_is_regenerated_once(self, facts,
+                                                              metadata,
+                                                              tmp_path):
+        """A plan whose editorial_direction names props not in the evidence
+        scenes triggers ONE corrective regeneration, then the audit is recorded
+        (never forced through silently)."""
+
+        class _SeqLLM:
+            def __init__(self):
+                self.calls = []
+                self._plan_calls = 0
+
+            def __call__(self, prompt):
+                self.calls.append(prompt)
+                if "finalizing the plan" in prompt:
+                    self._plan_calls += 1
+                    if self._plan_calls == 1:
+                        ed = {
+                            "pacing": "slow",
+                            "visual_style": "empty chairs and a flying saucer "
+                                            "in the saloon",
+                            "audio_style": "minimal",
+                            "editing_style": "quiet cuts",
+                        }
+                    else:
+                        ed = {
+                            "pacing": "slow",
+                            "visual_style": "close-up on the revolver while "
+                                            "the barman talks",
+                            "audio_style": "minimal",
+                            "editing_style": "quiet cuts",
+                        }
+                    return json.dumps({
+                        "concept": {"title": "C", "hook": "h", "thesis": "s"},
+                        "format": {"type": "short_video_essay",
+                                   "duration_sec": 90},
+                        "editorial_direction": ed,
+                    })
+                return json.dumps({"concepts": [{
+                    "title": "C", "hook": "h",
+                    "thesis": "a specific grounded claim about the saloon",
+                    "why_interesting": "w",
+                    "required_evidence": ["revolver"],
+                    "visual_opportunity": "close-up",
+                    "format": "short_video_essay",
+                }]})
+
+        mock = _SeqLLM()
+        director = MovieGroundedDirector(mock, memory_dir=tmp_path / "mem")
+        res = director.develop(metadata, facts, num_concepts=1, min_coverage=0.4)
+        plan = res["plan"]
+        # 3 calls: brainstorm + first plan + corrective plan retry.
+        assert res["llm_stats"]["llm_calls"] == 3
+        assert plan is not None
+        audit = plan["grounding_audit"]
+        assert audit["sufficient"] is True
+        assert "chairs" not in audit["invented_terms"]
+        assert "revolver" in " ".join(audit["grounded_terms"])
+        # The corrective prompt carried the exact offending terms.
+        assert "flying" in mock.calls[-1] or "saucer" in mock.calls[-1]
+
+    def test_plan_regeneration_bounded_at_one(self, facts, metadata, tmp_path):
+        """If the model keeps hallucinating, we record ONE retry and record the
+        audit honestly rather than looping or silently forcing content."""
+
+        class _StubbornLLM:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(self, prompt):
+                self.calls.append(prompt)
+                if "finalizing the plan" in prompt:
+                    return json.dumps({
+                        "concept": {"title": "C", "hook": "h", "thesis": "s"},
+                        "format": {"type": "short_video_essay",
+                                   "duration_sec": 90},
+                        "editorial_direction": {
+                            "pacing": "slow",
+                            "visual_style": "a flying saucer over the saloon",
+                            "audio_style": "minimal",
+                            "editing_style": "quiet cuts",
+                        },
+                    })
+                return json.dumps({"concepts": [{
+                    "title": "C", "hook": "h",
+                    "thesis": "a specific grounded claim about the saloon",
+                    "why_interesting": "w",
+                    "required_evidence": ["revolver"],
+                    "visual_opportunity": "close-up",
+                    "format": "short_video_essay",
+                }]})
+
+        director = MovieGroundedDirector(_StubbornLLM(),
+                                         memory_dir=tmp_path / "mem")
+        res = director.develop(metadata, facts, num_concepts=1, min_coverage=0.4)
+        assert res["llm_stats"]["llm_calls"] == 3  # bounded: 1 corrective retry
+        audit = res["plan"]["grounding_audit"]
+        assert audit["sufficient"] is False  # honestly recorded, not faked
+        assert "saucer" in audit["invented_terms"]
 
     def test_write_report_writes_director_reasoning_md(self, facts, metadata, tmp_path):
         """The public write_report alias produces reports/director_reasoning.md."""

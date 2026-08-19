@@ -279,14 +279,31 @@ Generate now:
 """
 
 
-def build_plan_prompt(context: str, duration_sec: int = 90) -> str:
+def build_plan_prompt(
+    context: str,
+    duration_sec: int = 90,
+    grounding_warnings: Optional[List[str]] = None,
+) -> str:
     """Prompt to build the final scene-aware director plan.
 
     The concept is already decided (deterministic — the selected concept). The
     model must only produce ``format`` and ``editorial_direction``, and every
     claim there must be grounded in the evidence scenes shown. It must NOT
     invent new characters, objects, locations, or moments.
+
+    ``grounding_warnings`` (optional) list concrete terms from a previous plan
+    attempt that no scene actually contains — the model must not reuse them.
     """
+    warnings_blob = ""
+    if grounding_warnings:
+        warnings_blob = (
+            "\n## GROUNDING CORRECTION (your previous plan was audited)\n"
+            "The following concrete terms you used do NOT exist in any evidence "
+            "scene. Remove them and re-describe the passage abstractly (e.g. "
+            "\"the figure's stillness\") or with a verbatim vocabulary term:\n"
+            + "\n".join(f"- {t}" for t in grounding_warnings)
+            + "\n"
+        )
     return f"""
 You are a director finalizing the plan for the SELECTED CONCEPT shown below,
 grounded ONLY in the evidence scenes also shown. The video is {duration_sec}
@@ -298,10 +315,17 @@ MANDATORY:
 - editorial_direction must describe ONLY the moments, objects, characters, and
   locations that appear in the evidence scenes below. NEVER invent a new scene,
   character, object, location, or line of dialogue.
+- Concrete characters, objects, locations, actions, themes, and moods may ONLY
+  be cited if they appear VERBATIM in "VERBATIM VOCABULARY FOR THE EVIDENCE
+  SCENES ONLY". Copy each one exactly — do not paraphrase, pluralize, or
+  invent variants.
 - If a moment is ambiguous, describe it abstractly (e.g. "the figure's
   stillness") rather than inventing concrete objects (e.g. a broken clock, a
   patient's bed) that are not in the scenes.
-
+- Do not re-caption the edited essay as if new objects exist (no "empty
+  chairs", "open windows", "silhouettes", "hands on surfaces", "city noise")
+  unless those exact terms are listed in the vocabulary.
+{warnings_blob}
 Return ONLY valid JSON (no markdown, no code fences) with this structure:
 {{
   "concept": {{
