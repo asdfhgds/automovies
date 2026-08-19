@@ -14,6 +14,7 @@ from director.evidence import EvidenceAnalyzer
 from director.grounded import MovieGroundedDirector
 from director.concepts import (
     build_generation_prompt,
+    build_rejection_prompt,
     parse_concepts,
     parse_plan,
     compute_diversity_metric,
@@ -163,6 +164,30 @@ class TestContextBuilder:
         text = scene_summary(empty.scenes[0])
         assert "unknown_character_01" in text
 
+    def test_grounded_example_present_and_passable(self, facts, metadata):
+        cb = DirectorContextBuilder()
+        context, meta = cb.build_concept_generation_context(metadata, facts)
+        assert meta.get("example_included") is True
+        assert "## WORKED EXAMPLE" in context
+        # Extract the embedded example JSON and verify it sorts HIGH by the
+        # deterministic matcher (it must be a demonstrably-correct template).
+        seg = context[context.find("## WORKED EXAMPLE"):]
+        obj = seg[seg.find("{"):]
+        obj = obj[:obj.rfind("}") + 1]
+        example = json.loads(obj)
+        ev = EvidenceAnalyzer(facts).concept_evidence(example)
+        assert ev["coverage"] == "HIGH"
+        assert ev["claim_coverage"] == "HIGH"
+
+    def test_grounded_example_skipped_when_no_citable_facts(self):
+        empty = SceneFacts.from_movie_intelligence(
+            scenes=[_scene("scene-1", 0, 5, location="empty")])
+        cb = DirectorContextBuilder()
+        context, meta = cb.build_concept_generation_context(
+            {"title": "Empty"}, empty)
+        assert meta.get("example_included", False) is False
+        assert "## WORKED EXAMPLE" not in context
+
 
 # --------------------------------------------------------------------------- #
 # Scene facts / hallucination prevention
@@ -271,6 +296,25 @@ class TestConcepts:
     def test_generic_thesis_detected(self):
         assert is_generic_thesis("This movie explores violence.") is True
         assert is_generic_thesis("specific evidence-based claim") is False
+
+    def test_rejection_prompt_shows_failed_refs(self):
+        rejected = [{
+            "title": "Bad", "thesis": "claim about a flying saucer",
+            "evidence_refs": [{"kind": "object", "value": "flying saucer"}],
+        }]
+        prompt = build_rejection_prompt(
+            "CTX", rejected, substitutes_needed=1,
+            ref_failures=[["flying saucer"]],
+        )
+        assert "flying saucer" in prompt
+        assert "NOT FOUND in the movie" in prompt
+
+    def test_rejection_prompt_without_failures_still_lists_concepts(self):
+        rejected = [{"title": "Bad", "thesis": "s",
+                     "evidence_refs": [{"kind": "object", "value": "x"}]}]
+        prompt = build_rejection_prompt("CTX", rejected, substitutes_needed=1)
+        assert "re-running" in prompt
+        assert "Bad" in prompt
 
 
 # --------------------------------------------------------------------------- #

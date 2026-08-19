@@ -167,12 +167,18 @@ MANDATORY GROUNDING (from the context above):
 2. Cite only SCENE ids, characters, objects, locations, actions, themes, moods,
    or dialogue that actually appear. NEVER invent anyone or anything.
 3. Every evidence_ref must use exact canonical identifiers from WHAT ACTUALLY
-   EXISTS and the scene cards. Prefer a scene ref ({{"kind": "scene",
+   EXISTS and the scene cards — COPY THE VALUES VERBATIM, character for
+   character (including capitalization), from the lists above. Do not
+   paraphrase them ("child" is not "person", "holds a weapon" is not
+   "revolver"). Prefer a scene ref ({{"kind": "scene",
    "scene_id": "scene-1"}}) whenever a specific scene carries your point.
 4. The matcher is exact and token-based: "son" will NOT match just because
    "person" also appears; an object you cite must literally be listed.
 5. If the movie lacks material for a thesis, do NOT force it. Pick a thesis the
    available scenes actually support.
+6. A WORKED EXAMPLE is included in the context (## WORKED EXAMPLE). It shows
+   the ONLY way evidence_refs can pass: values copied verbatim from the scene
+   cards. Mirror its ref style; write your own wording.
 
 DO NOT produce five versions of "the movie explores violence/problem X". Each
 concept must have its own hook, thesis, and a distinct set of grounded
@@ -211,23 +217,41 @@ def build_rejection_prompt(
     context: str,
     rejected: List[Dict[str, Any]],
     substitutes_needed: int,
+    ref_failures: Optional[List[List[str]]] = None,
 ) -> str:
-    """Prompt to replace concepts that failed evidence grounding."""
-    rejected_blob = "\n".join(
-        f"- [{c.get('title', '?')}] thesis={c.get('thesis', '')} "
-        f"evidence_refs=[{', '.join(_refs_line(r) for r in concept_refs(c))}]"
-        for c in rejected
-    )
+    """Prompt to replace concepts that failed evidence grounding.
+
+    ``ref_failures`` (optional, parallel to ``rejected``) is the per-concept
+    list of rendered refs that were NOT FOUND in the movie (e.g. from
+    ``concept_evidence(concept)["unmatched_claims"]``). Showing the exact
+    failed refs gives the model corrective, deterministic feedback instead of a
+    vague "your evidence was rejected".
+    """
+    rejected_lines = []
+    for i, c in enumerate(rejected):
+        line = (f"- [{c.get('title', '?')}] thesis={c.get('thesis', '')} "
+                f"evidence_refs=[{', '.join(_refs_line(r) for r in concept_refs(c))}]")
+        failures = (ref_failures or [None] * len(rejected))[i]
+        if failures:
+            line += ("\n    These refs were NOT FOUND in the movie, do NOT "
+                     "reuse them: " + ", ".join(failures))
+        rejected_lines.append(line)
+    rejected_blob = "\n".join(rejected_lines)
     return f"""
 You are re-running a concept brainstorm. {substitutes_needed} of the previous
 concepts were REJECTED because the movie's scenes did not actually contain the
-evidence they claimed. Generate {substitutes_needed} NEW replacement concepts
+evidence they claimed. Below each rejected concept we list the exact refs that
+do NOT exist in this movie — replace them with identifiers copied VERBATIM from
+the scene cards / WHAT ACTUALLY EXISTS in the context (see ## WORKED EXAMPLE).
+Generate {substitutes_needed} NEW replacement concepts
 that are grounded in the actual scenes shown in the context below.
 
 GROUNDING RULES:
 - Keep your CREATIVE CLAIM separate from your evidence_refs.
 - evidence_refs must ONLY use exact canonical identifiers from the context
   (scene ids, characters, objects, locations, actions, themes, moods, dialogue).
+- Copy each evidence_ref value VERBATIM (character for character) from the
+  scene cards or WHAT ACTUALLY EXISTS. Never paraphrase or reword them.
 - Every replacement concept needs at least one scene ref
   ({{"kind": "scene", "scene_id": "scene-1"}}).
 - Do not repeat the rejected ideas' theses or their ungrounded refs.

@@ -172,9 +172,13 @@ class MovieGroundedDirector:
     def _generate(
         self, context: str, num_concepts: int,
         reject_previous: Optional[List[Dict[str, Any]]],
+        ref_failures: Optional[List[List[str]]] = None,
     ) -> List[Dict[str, Any]]:
         if reject_previous:
-            prompt = build_rejection_prompt(context, reject_previous, num_concepts)
+            prompt = build_rejection_prompt(
+                context, reject_previous, num_concepts,
+                ref_failures=ref_failures,
+            )
         else:
             prompt = build_generation_prompt(context, num_concepts)
         raw = self.llm(prompt)
@@ -223,8 +227,17 @@ class MovieGroundedDirector:
         # Regenerate substitutes for pending ones, up to max_rounds times.
         rounds = 0
         while pending and rounds < max_rounds:
+            def _ref_failures(concepts):
+                """Per-concept list of rendered refs that did NOT match."""
+                out = []
+                for c in concepts:
+                    ev = analyzer.concept_evidence(c)
+                    out.append(list(ev["unmatched_claims"]))
+                return out
+
             substitutes = self._generate(context, len(pending),
-                                         reject_previous=pending)
+                                         reject_previous=pending,
+                                         ref_failures=_ref_failures(pending))
             pending = []
             for sub in substitutes:
                 (admissible if _admissible(sub) else pending).append(sub)

@@ -14,6 +14,7 @@ Two kinds of output are produced:
 
 Both are deterministic. No LLM calls happen here.
 """
+import json
 from typing import Dict, Any, List, Optional, Tuple
 
 from director.concepts import concept_refs, render_ref
@@ -101,6 +102,53 @@ class DirectorContextBuilder:
         meta[meta_key] = included
         return kept
 
+    def _grounded_example(self, scene_facts: SceneFacts) -> Optional[str]:
+        """A worked, fully-grounded example concept built ONLY from real facts.
+
+        Picks a scene with an object + action + theme/mood actually on record,
+        then renders a complete concept whose evidence_refs are guaranteed to
+        resolve (they are copied verbatim from the same ``SceneFacts`` the
+        analyst will check against). Returns None if the movie has so few facts
+        that no scene can support an object + action + theme example.
+        """
+        for sf in scene_facts:
+            objects = [o for o in sf.objects if str(o).strip()]
+            actions = [a for a in sf.actions if str(a).strip()]
+            themes = list(dict.fromkeys(
+                t for t in sf.themes if str(t).strip()))
+            if not objects or not actions:
+                continue
+            mood = sf.mood if str(sf.mood or "").strip() else (
+                themes[0] if themes else "")
+            if not mood:
+                continue
+            refs = [
+                {"kind": "scene", "scene_id": sf.scene_id},
+                {"kind": "object", "value": objects[0]},
+                {"kind": "action", "value": actions[0]},
+                {"kind": "theme", "value": themes[0] if themes else mood},
+            ]
+            example = {
+                "title": f"The story of the {objects[0]}",
+                "hook": f"Start with {objects[0]} already on screen.",
+                "thesis": (
+                    f"{objects[0]} unlocks the {mood} mood in {sf.scene_id} "
+                    f"through {actions[0]}."
+                ),
+                "why_interesting": (
+                    "Every element here (scene, object, action, theme/mood) is "
+                    "copied VERBATIM from the scene cards above; a matching "
+                    "matcher accepts it."
+                ),
+                "evidence_refs": refs,
+                "visual_opportunity": f"Give {objects[0]} a close-up while "
+                                       f"someone does {actions[0]}.",
+                "format": "short_video_essay",
+                "diversity_angle": "grounding example — do not reuse verbatim",
+            }
+            return json.dumps(example, indent=2)
+        return None
+
     def build_concept_generation_context(
         self,
         movie_metadata: Dict[str, Any],
@@ -113,6 +161,7 @@ class DirectorContextBuilder:
             "scenes_included": 0,
             "total_scenes": len(scene_facts),
             "memory_included": False,
+            "example_included": False,
             "truncated": False,
         }
 
@@ -147,18 +196,10 @@ class DirectorContextBuilder:
             "6. The matcher is exact and token-based: \"son\" will NOT match\n"
             "just because \"person\" also appears here."
         )
-        parts.append(
-            f"## MOVIE\nTitle: {title}\nDuration: {dur_str}\n\n{grounding}"
-        )
+        header_part = f"## MOVIE\nTitle: {title}\nDuration: {dur_str}\n\n{grounding}"
+        parts.append(header_part)
 
-        budget = int(self.available * 0.55)
-        scene_parts = [scene_summary(sf, i) for i, sf in enumerate(scene_facts)]
-        chosen = self._fit(scene_parts, budget, meta, "scenes_included",
-                           "truncated")
-        if chosen:
-            parts.append("## ACTUAL SCENES\n" + "\n\n".join(chosen))
-
-        # 3. Fact vocabulary (known names — hallucination guard).
+        # 2. Fact vocabulary (known names — hallucination guard).
         def _unique(values, limit=24):
             seen, out = set(), []
             for v in values:
@@ -183,7 +224,35 @@ class DirectorContextBuilder:
         if self._estimate_tokens(vocab) <= int(self.available * 0.7):
             parts.append(vocab)
 
-        # 4. Creative memory (avoid repetition) if it fits.
+        # 3. Worked, fully-grounded example (shows the exact ref style).
+        # Highest priority: reserve its space up front so it always appears.
+        example = self._grounded_example(scene_facts)
+        example_part = ""
+        if example:
+            example_part = (
+                "## WORKED EXAMPLE (already verified against this movie)\n"
+                "Treat this as a template ONLY for the evidence_refs style —\n"
+                "every value below is copied verbatim from the scene cards, so\n"
+                "it passes the exact matcher. Write your own thesis/hook; do\n"
+                "not copy this concept.\n\n" + example
+            )
+
+        # 4. Scene cards (truncated by token budget) — scenes fit into whatever
+        # remains AFTER the always-reserved parts above.
+        reserved_now = self._estimate_tokens("\n\n".join(parts)) + (
+            self._estimate_tokens(example_part) if example_part else 0
+        )
+        scene_budget = max(0, self.available - reserved_now)
+        scene_parts = [scene_summary(sf, i) for i, sf in enumerate(scene_facts)]
+        chosen = self._fit(scene_parts, scene_budget, meta, "scenes_included",
+                           "truncated")
+        if chosen:
+            parts.append("## ACTUAL SCENES\n" + "\n\n".join(chosen))
+        if example_part:
+            parts.append(example_part)
+            meta["example_included"] = True
+
+        # 5. Creative memory (avoid repetition) if it fits.
         if creative_memory and creative_memory.strip():
             mem_tokens = self._estimate_tokens(creative_memory)
             if self._estimate_tokens("\n\n".join(parts)) + mem_tokens <= self.available:
