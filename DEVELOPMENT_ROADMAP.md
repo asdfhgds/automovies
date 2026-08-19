@@ -108,8 +108,13 @@
   default flipped to `embedding`.
 - ✅ **272 tests pass** (23 new grounded-director tests, incl. 2 run-bookkeeping);
   real-Qwen test gated (`llm_integration`).
-- ⏳ **Real-Qwen clip run pending** (validated movie `bc6384be-...`). Stops at the
-  plan — NOT wired to the script stage (§11).
+- ⏳→❌ **Real-Qwen run EXECUTED on Colab T4 — VERDICT FAIL**: generated 0 /
+  rejected 18 / selected NONE; every concept `LOW (0/3 matched)`. Root cause
+  (demonstrated): the generator hallucinated a different film (father/son family
+  drama) instead of reusing the provided grounded vocabulary; the rejection gate
+  proved correct. Next: anchor generation to verbatim known objects/locations,
+  keep the strict gate, recalibrate matching for genuinely-present evidence only,
+  then re-run (§11). Stops at the plan — NOT wired to the script stage.
 
 ### Foundation: Movie Understanding (Real & Tested)
 - ✅ **Transcription**: Whisper/WhisperX with word-level timestamps
@@ -414,15 +419,15 @@ Improve quality and reduce costs through iteration.
    tension→scene-30 #2, object #1, but narrative queries still miss on the PT
    clip. Next: LLM/multilingual retrieval validated on an English movie, then
    feed the validated scene knowledge into the Creative Director
-5c. ✅ **Movie-grounded Creative Director built + tested** — SceneFacts + context
-   builder + evidence gate (reject generic/un-evidenced) + ConceptCritic +
-   scene-aware plan + `director_reasoning.md`; 272 fast tests pass. Validation
-   harness now records honest runtime/GPU/regeneration measurements and a
-   dedicated Colab notebook exists (`colab_grounded_director_validation.ipynb`).
-   ⏳ **Real-Qwen clip validation pending** (validated movie `bc6384be-...`,
-   `scripts/run_director_validation.py` / the new notebook / Cell 7d) — then wire the
-   selected concept + evidence strategy to narrative/editorial generation in the
-   *next* milestone (§11).
+5c. ✅/❌ **Movie-grounded Creative Director built + tested; real-Qwen run
+   EXECUTED (FAIL)** — SceneFacts + context builder + evidence gate (reject
+   generic/un-evidenced) + ConceptCritic + scene-aware plan +
+   `director_reasoning.md`; 272 fast tests pass. The T4 run produced
+   **0/18 grounded concepts** (all rejected — generator hallucinated a family
+   drama; gate proven correct). Next: verbatim-vocabulary anchoring in the
+   generation prompt, strict gate kept, matcher recalibrated for present-only
+   evidence, then re-run — and only then wire the selected concept + evidence
+   strategy to narrative/editorial generation in the *next* milestone (§11).
 6. ⏳ Evaluate several real videos; pick next milestone from the largest visible weakness
 
 ### Medium Priority (Do After)

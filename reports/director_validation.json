@@ -1,28 +1,48 @@
 {
   "project_id": "bc6384be-47a5-4ee8-8674-7ff861472026",
-  "status": "AWAITING_REAL_QWEN_RUN",
-  "note": "Human-evaluation scaffold. The 'runtime' fields must come from the real run's director_validation.json; the per-concept fields (specificity/grounding/originality/visual_potential/generic_ai_feeling/human_notes) are human judgments and must NOT be fabricated or filled from unit tests.",
+  "status": "RUN_EXECUTED_VERDICT_FAIL",
+  "note": "Real-Qwen run executed on Colab T4. All 18 generated concepts rejected (LOW 0/3). Human verdict: FAIL - concepts mostly hallucinated (invented family drama not in the facts) + formulaic; the rejection gate worked. Matcher is brittle for partly-real evidence (mirror/counter/rain exist) but loosening it alone would admit hallucinations.",
   "runtime": {
-    "gpu": "not measured",
-    "vram_total_gb": "not measured",
-    "vram_peak_allocated_mb": "not measured",
-    "model": "not measured",
-    "device": "not measured",
-    "dtype": "not measured",
-    "model_load_time_sec": "not measured",
-    "total_generation_time_sec": "not measured",
-    "llm_calls": "not measured",
+    "gpu": "Tesla T4",
+    "vram_total_gb": "not measured (see run director_validation.json)",
+    "vram_peak_allocated_mb": "not measured (see run director_validation.json)",
+    "model": "Qwen/Qwen3-4B-Instruct-2507",
+    "device": "cuda",
+    "dtype": "4bit (configured in notebook)",
+    "model_load_time_sec": 49.03,
+    "total_generation_time_sec": 378.0,
+    "llm_calls": 3,
     "regeneration_rounds": "not measured",
-    "substitutes_generated": "not measured",
-    "wall_clock_sec": "not measured",
-    "concepts_generated": "not measured",
-    "concepts_rejected": "not measured",
-    "selected_concept": "not measured",
-    "diversity_metric": "not measured"
+    "substitutes_generated": 12,
+    "wall_clock_sec": 427.05,
+    "concepts_generated": 0,
+    "concepts_rejected": 18,
+    "selected_concept": "NONE",
+    "diversity_metric": 0.0
   },
-  "decision_gate": "awaiting_run",
+  "decision_gate": "FAIL",
   "concepts": [],
-  "grounding_audit": [],
-  "hallucination_examples": [],
-  "main_problems": []
+  "grounding_audit": [
+    "Hallucination guard + rejection gate proved correct: rejected all 18 un-evidenced concepts (LOW 0/3).",
+    "Generator hallucinated an entirely different film (father/son family drama: waiting room, broken clock, dinner table, red dress, photograph, kitchen, plate, book - none grounded; clock/kitchen/father/plate/book/photograph all 0 scenes).",
+    "Examples of invented evidence with 0 matched scenes: clock, kitchen, apartment, plate, bottle, book, photograph, drawer, dinner, father, mother, family.",
+    "Partly-real concepts also rejected: mirror(1), counter(1), window(3), rain(2), table(1), red(2), dress(5) exist in the facts but all-token phrase matching demands every token of the claim in one scene -> 0/3.",
+    "is_grounded uses substring semantics: 'son'/'door' report True from garbled transcript tokens (e.g. 'solution','person') - misleading.",
+    "'fire'->0 while facts contain 'burning car'; 'riding a horse'->0 while facts contain 'two cowboys on horseback'."
+  ],
+  "hallucination_examples": [
+    "invented: waiting room, broken clock, father/son relationship, photograph, note, drawer, book, kitchen, apartment key, doormat, shoes, dinner table, plate, empty bottle",
+    "red/dress exist as raw terms but the pairing 'red dress' is not evidenced; the concept was rejected (correct)."
+  ],
+  "main_problems": [
+    "PRIMARY: generator hallucination - Qwen did not reuse the grounded vocabulary; all 18 concepts cite evidence with 0 ground truth.",
+    "Evidence phrasing not anchored to the provided known-objects/locations terms.",
+    "SECONDARY: all-token lexical matching is brittle for multi-word claims; loosening alone would admit hallucinations."
+  ],
+  "fix_required": [
+    "Strengthen generation prompt + context: required_evidence MUST be verbatim single claims drawn from the provided known objects/locations/tokens; forbid inventing scenes/characters/objects.",
+    "Keep the strict evidence gate (proven correct).",
+    "Recalibrate matching only for genuinely-present evidence (single-token noun checks), never to admit ungrounded claims.",
+    "Re-run the Colab notebook and iterate until grounded concepts survive."
+  ]
 }

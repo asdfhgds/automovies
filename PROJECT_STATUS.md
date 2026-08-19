@@ -1,16 +1,18 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: Movie-grounded Creative Director milestone **built and unit-tested**;
-validation harness **instrumented** to record honest runtime/GPU/regeneration
-measurements; real-Qwen clip validation **pending execution on a Colab T4** (this
-machine has no CUDA). The Director now reads the existing
+**Last Updated**: Movie-grounded Creative Director **real-Qwen run EXECUTED on a
+Colab T4 — VERDICT FAIL**: all 18 generated concepts were rejected (`LOW 0/3`)
+because the generator hallucinated a different film (invented family drama),
+while the rejection gate worked correctly. The Director now reads the existing
 Movie Intelligence (`movie_index.json` → `SceneFacts`), builds a compact
 fact-grounded context, asks real Qwen for 5 diverse concepts, **rejects** any
 concept whose `required_evidence` is not actually present in the scenes, selects
 the strongest grounded concept, and emits a scene-aware director plan
 (`reports/director_reasoning.md`). Evidence verifier, new retrieval system, and
 script wiring are intentionally **not** implemented. 272 fast tests pass (23 new
-grounded-director tests, incl. 2 run-bookkeeping).
+grounded-director tests, incl. 2 run-bookkeeping). **Next action: fix the
+demonstrated generator-hallucination problem (verbatim-vocabulary anchoring),
+then re-run on the T4.**
 
 Prior milestone (kept): Movie Intelligence validation **executed on a real movie**
 + **dense-embedding retrieval layer added and measured**. The real run
@@ -631,10 +633,28 @@ actually present in the movie.
   regeneration rounds, substitutes generated, wall clock.
 - `notebooks/colab_grounded_director_validation.ipynb` — dedicated real-Qwen
   validation on the existing `bc6384be-...` movie (GPU check → clone+deps →
-  Drive mount → strict run → show outputs).
-- `reports/director_validation.md` / `.json` (repo root) — blank human-eval
-  scaffold (specificity / grounding / originality / visual_potential /
-  generic_ai_feeling / human_notes) to be filled ONLY after the real run.
+  Drive mount → upload → strict run → show outputs).
+- `reports/director_validation.md` / `.json` (repo root) — human-eval record
+  (filled with the FAIL verdict + runtime + matcher audit after the run).
+
+### Real-Qwen run result (Colab T4) — VERDICT FAIL
+- Timings (measured): Tesla T4, `Qwen/Qwen3-4B-Instruct-2507` (4bit, cuda),
+  load 49.03s, 3 LLM calls, 12 substitutes, wall clock 427.05s,
+  **generated 0 / rejected 18 / selected NONE / diversity 0.000**.
+- Every rejected concept: `coverage LOW (0/3 matched)`.
+- Demonstrations: the concepts invented a father/son family drama (waiting
+  room, broken clock, dinner table, photograph, kitchen, plates, books) that is
+  NOT in the facts (desert, riverbank, bus/subway, convenience store, mirror,
+  cash register, horse, cowboys, burning car). Invented terms with 0 scenes:
+  clock, kitchen, apartment, plate, bottle, book, photograph, drawer, dinner,
+  father, mother, family.
+- The **rejection gate is proven correct** (it rejected all hallucinated
+  concepts). The generator is the demonstrated bottleneck.
+- Matcher brittleness (secondary, NOT a standalone fix): `mirror`/`counter`/
+  `rain`/`table`/`red`/`dress` exist in the facts yet scored 0/3 due to
+  all-token phrase matching; `is_grounded()` substring semantics mislead
+  (`son`/`door` True from garbled tokens). Loosening matching alone would admit
+  hallucinations.
 
 ### Files added
 - `src/director/scene_facts.py` — normalizer + fact access + hallucination guard.

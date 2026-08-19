@@ -1,8 +1,12 @@
 # NEXT MILESTONE
 
-**Last Updated**: Movie-grounded Creative Director milestone **built and
-unit-tested; validation harness instrumented; real-Qwen run pending human
-execution on a Colab T4**.
+**Last Updated**: Movie-grounded Creative Director **real-Qwen run EXECUTED on a
+Colab T4 — VERDICT: FAIL**. All 18 generated concepts were rejected
+(`LOW 0/3 matched`); the generator **hallucinated a different film** (father/son
+family drama — waiting room, broken clock, dinner table, photograph, kitchen —
+none grounded in the facts), while the rejection gate behaved correctly.
+Fix required on the demonstrated problem: anchor generation to the verbatim
+grounded vocabulary (see below).
 
 What this milestone does (see `PROJECT_STATUS.md` for details): the Director now
 reads the existing Movie Intelligence (`movie_index.json` → `SceneFacts`), builds
@@ -19,15 +23,26 @@ YouTube automation, and **script wiring** — the pipeline stops at the selected
 concept + director plan so the Director can be validated on its own.
 **272 fast tests pass** (23 new grounded-director tests).
 
-**Validation harness (this session)**: `scripts/run_director_validation.py` now
-records honest runtime measurements (GPU/VRAM via torch, model load time,
-per-call generation times, LLM call counts, regeneration rounds, substitutes
-generated, wall clock) into `reports/director_validation.json`;
-`MovieGroundedDirector` exposes `result["llm_stats"]`; a dedicated notebook
-`notebooks/colab_grounded_director_validation.ipynb` runs the real-Qwen
-validation on the existing `bc6384be-...` movie; a blank human-eval scaffold
-lives at `reports/director_validation.md` / `.json` (to be filled only after the
-real run — never fabricated).
+**Real-Qwen run (Colab T4, executed)**: `Qwen/Qwen3-4B-Instruct-2507` (4bit,
+cuda), model load 49.03s, 3 LLM calls, 12 substitutes, wall clock 427.05s.
+**Generated 0 / rejected 18 / selected NONE, diversity 0.000.** Every one of the
+18 rejected concepts shows `coverage LOW (0/3 matched)`. Human verdict **FAIL**:
+- **Hallucinated film**: the concepts describe a father/son family drama
+  (waiting room, broken clock, dinner table, red dress, photograph, kitchen,
+  plate, book) that does NOT exist in the scene facts (desert, riverbank,
+  bus/subway interior, convenience store, cash register, mirror, toothbrush,
+  horse, cowboys, sheriff uniforms, burning car). Invented terms with 0 scenes:
+  clock, kitchen, apartment, plate, bottle, book, photograph, drawer, dinner,
+  father, mother, family.
+- **Formulaic**: every thesis uses the same "The X is not just Y — it is Z /
+  film uses X ... symbol ... emotional ..." AI-essay pattern.
+- **The rejection gate worked correctly** — it rejected all 18. That is the
+  milestone's strongest component.
+- **Matcher is brittle for partly-real evidence** (`mirror` 1, `counter` 1,
+  `rain` 2, `table` 1, `red` 2, `dress` 5 all exist in the facts yet scored
+  0/3), and `is_grounded()` substring semantics are misleading (`son`/`door`
+  True from garbled tokens like "solution"/"person"). But loosening matching
+  alone would ADMIT hallucinations — not a valid fix.
 
 Prior milestone (kept): Movie Intelligence validation **completed on a real
 movie**. `notebooks/colab_vision_gpu.ipynb` ran end-to-end on a Colab T4 with
@@ -165,29 +180,30 @@ retrieval human-verdict record is tracked in `reports/`.
     a concept whose claims don't literally appear is rejected (this is a feature,
     but it means semantically-paraphrased-but-true evidence can be under-counted).
 
-- **CURRENT BOTTLENECK**: **validating the Movie-grounded Creative Director on the
-  real movie with real Qwen.** The infrastructure is built and unit-tested
-  (272 fast tests). The unproven link is that real Qwen produces 5 genuinely
-  different, grounded, non-generic concepts on the real `bc6384be` intelligence,
-  and that the evidence gate rejects only the right things. Secondary bottleneck
-  (prior milestone, kept): retrieval *semantics* — TF-IDF scored 1/8 GOOD and
-  MiniLM helped but narrative/thematic queries still miss on non-English clips.
+- **CURRENT BOTTLENECK**: **the generator hallucinates a different film.** The
+  real-Qwen run (Colab T4) produced 0/18 grounded concepts — all 18 were
+  correctly rejected because they were almost entirely invented (family-drama
+  scenes absent from the facts) and formulaic. The rejection gate is proven;
+  the unproven/weak link is the generation prompt+context: real Qwen does not
+  reuse the provided known-objects/locations vocabulary. Secondary kept:
+  matcher brittleness for partly-real evidence (loosening alone would admit
+  hallucinations, so it is NOT a standalone fix).
 
-- **NEXT ACTION** (validate the grounded director, then wire it to the script)
-  1. **Execute the real-Qwen grounded-director run** on the validated movie:
-     `notebooks/colab_grounded_director_validation.ipynb` (dedicated; recommended)
-     or `python scripts/run_director_validation.py --project data/bc6384be-...`
-     on a Colab T4 (or Notebook Cell 7d). Inspect `reports/director_reasoning.md`
-     and `reports/director_validation.json` (which now includes the `runtime`
-     block): are the 5 concepts specific, non-generic, grounded in actual scenes,
-     and meaningfully different (diversity metric)? Which concepts were rejected
-     and why? Fill/record the per-milestone fields (§16): context size, model,
-     concepts generated, selected concept, evidence coverage, failures, known
-     hallucination cases, next bottleneck. Then fill the human-eval fields in
-     `reports/director_validation.md` / `.json`.
-  2. **Iterate on grounding quality** if the real run under-delivers: relax/refine
-     `required_evidence` matching (stemming / synonym-aware lexical matching, not a
-     new retrieval system), or improve the compact context so Qwen cites real scenes.
+- **NEXT ACTION** (fix the demonstrated generator grounding problem, re-validate, then wire to script)
+  1. **Fix the generator (demonstrated problem, director scope only)**: strengthen
+     the generation prompt + context so `required_evidence` MUST be verbatim,
+     single-object/single-location claims drawn from the provided known
+     objects/locations/tokens, and explicitly forbid inventing scenes,
+     characters, or objects. Keep the strict evidence gate. Recalibrate
+     matching only for genuinely-present evidence (single-noun checks; never
+     admit ungrounded claims). Add focused unit tests.
+  2. **Re-run the real-Qwen validation** on the T4
+     (`notebooks/colab_grounded_director_validation.ipynb` →
+     `scripts/run_director_validation.py --project data/bc6384be-...`) and
+     inspect `director_reasoning.md` + `director_validation.json`: do several
+     concepts survive with coverage ≥ MED? Are they specific, non-generic,
+     grounded in real scenes, different from each other? Update
+     `reports/director_validation.md` / `.json` human-eval fields.
   3. **Do NOT wire the script stage yet** (§11). Once the director is validated
      as genuinely specific + grounded, the *next* milestone connects the selected
      concept + evidence strategy to narrative/editorial generation.

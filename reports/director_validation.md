@@ -1,96 +1,110 @@
 # Director Validation — Human Evaluation
 
-**Status**: AWAITING REAL-QWEN RUN — these fields are intentionally BLANK until a
-human inspects the real-Qwen output for project
-`bc6384be-47a5-4ee8-8674-7ff861472026`.
-
-Do NOT fill these from unit tests. Fill them only after running
-`scripts/run_director_validation.py` (or
-`notebooks/colab_grounded_director_validation.ipynb`) on a Colab T4 and reading
-`director_reasoning.md` + `director_validation.json`.
+**Status**: REAL-QWEN RUN EXECUTED (Colab T4) — **Verdict: FAIL**.
+Project: `bc6384be-47a5-4ee8-8674-7ff861472026`.
 
 ---
 
-## 1. Runtime record (from `director_validation.json` → `runtime`)
+## 1. Runtime record (measured on the run)
 
-- GPU: _not measured_
-- VRAM total: _not measured_
-- VRAM peak allocated: _not measured_
-- Model: _not measured_
-- Device: _not measured_
-- Dtype: _not measured_
-- Model load time (sec): _not measured_
-- Total generation time (sec): _not measured_
-- LLM calls: _not measured_
-- Regeneration rounds: _not measured_
-- Substitutes generated: _not measured_
-- Wall clock (sec): _not measured_
-- Concepts generated: _not measured_
-- Concepts rejected: _not measured_
-- Selected concept: _not measured_
-- Diversity metric: _not measured_
+- GPU: Tesla T4
+- VRAM total: see run `director_validation.json` (not in console summary)
+- VRAM peak allocated: see run `director_validation.json`
+- Model: Qwen/Qwen3-4B-Instruct-2507
+- Device: cuda (strict `REQUIRE_REAL_LLM=true`)
+- Dtype: 4bit (configured in notebook)
+- Model load time (sec): 49.03
+- Total generation time (sec): 378.0
+- LLM calls: 3
+- Substitutes generated: 12
+- Wall clock (sec): 427.05
+- Concepts generated (surviving): 0
+- Concepts rejected: 18 (6 initial + 12 substitutes) — **every one `LOW (0/3 matched)`**
+- Selected concept: NONE
+- Diversity metric: 0.000
 
 ## 2. Decision gate
 
-- **PASS** / **PARTIAL** / **FAIL**: _awaiting run_
-- Justification: _awaiting run_
+- **FAIL** — the director produced **zero usable concepts**. The 18 generated
+  concepts are **mostly hallucinated / unrelated to this movie** and formulaic;
+  while the evidence gate behaved correctly (rejected all 18), the generator is
+  not producing actionable concepts on this intelligence.
 
 ## 3. Per-concept human evaluation
 
-For each generated concept (copy the block per concept):
+All 18 rejected concepts share the same pathology (verified against the same
+SceneFacts the run used — `data/bc6384be-.../movie_index.json`):
 
-```
-### Concept <label>
-- title: ...
-- thesis: ...
-- hook: ...
-- required_evidence: ...
-- evidence_coverage (from report): ...
-- Specific (to this movie): GOOD | PARTIAL | BAD
-- Generic/AI feel: LOW | MEDIUM | HIGH
-- Evidence actually exists in the scenes: GOOD | PARTIAL | BAD
-- Selected/supporting scenes relevant: GOOD | PARTIAL | BAD
-- Human notes: ...
-```
+- **Specific to this movie**: BAD (all) — the concepts describe a father/son
+  family drama (waiting room, dinner table, red dress, broken clock, photograph,
+  kitchen, plates, books) that does NOT exist in the scene facts
+  (desert, riverbank, bus/subway interior, convenience store, cash register,
+  mirror, toothbrush, horse, cowboys, sheriff uniforms, burning car).
+- **Generic/AI feel**: HIGH (all) — same repeated formula
+  "The X is not just Y — it is Z / film uses X ... symbol ... emotional ...".
+- **Evidence actually exists**: BAD for ~half (clock, kitchen, apartment,
+  plate, bottle, book, photograph, drawer, dinner, father, mother, family all
+  have 0 scenes); PARTIAL for the rest — individual real terms *exist*
+  (`mirror` 1, `counter` 1, `window` 3, `rain` 2, `table` 1, `red` 2, `dress` 5)
+  but the multi-word evidence claims were rejected because the matcher requires
+  EVERY token of the phrase in the same scene.
+- **Selected/supporting scenes relevant**: BAD — no concept had any supporting
+  scenes (`coverage LOW (0/3 matched)` for all 18).
 
-### Concept A
-_awaiting run_
-
-### Concept B
-_awaiting run_
-
-### Concept C
-_awaiting run_
-
-### Concept D
-_awaiting run_
-
-### Concept E
-_awaiting run_
+Representative examples:
+- Rejected 2 "The Broken Clock ... Time as a Symbol" — `clock` has **0 scenes**
+- Rejected 3 "The Unwilling Mentor: Why the Father Doesn't Teach the Son" —
+  `father` **0 scenes**; family drama entirely invented
+- Rejected 7 "The Empty Chair at the Dinner Table" — `chair`/`dinner` 0 scenes
+- Rejected 4 "The Mirror That Lies" — `mirror` DOES exist (1 scene) but the
+  claim phrasing meant 0/3 matched — the matcher rejected a partly-real idea
 
 ## 4. Grounding-quality audit (EvidenceAnalyzer)
 
-Check whether lexical matching missed any real evidence due to:
-synonyms (`weapon` vs `revolver`), paraphrases, character aliases, implicit
-references, related objects/locations. Record concrete examples.
-
-- _awaiting run_
+- Hallucination guard + rejection gate: **work as designed** — rejected all 18
+  un-evidenced concepts; that is the milestone's strongest part.
+- Lexical matcher is **too strict AND too loose simultaneously**:
+  - too strict: all-token phrase match rejects real evidence
+    (`rain` exists but "rain that falls only on the window" needs every token);
+    `fire`→0 while facts have `burning car`.
+  - too loose at the token level: `son`/`door` "grounded=True" come from
+    substring hits inside garbled transcript tokens (e.g. "solution",
+    "person"), i.e. `is_grounded()` substring semantics can be misleading.
+- Relaxing matching alone would NOT fix the milestone — it would admit
+  hallucinated concepts (e.g. "clock" would still have no supported scenes).
 
 ## 5. Hallucination examples observed
 
-Did any concept invent characters / objects / locations / events? Was the
-rejection path triggered? Record concrete examples.
+The generator invented a whole different film. Concrete invented elements that
+are NOT grounded anywhere in the facts: waiting room, broken clock, father/son
+relationship, red dress (single terms `red`/`dress` occur but the compound
+`red dress` pairing is not evidenced), photograph, note, drawer, book, kitchen,
+apartment key, doormat, shoes, dinner table, plate, bottle, rain-window
+pairing. The rejection path correctly rejected all of these — documented proof
+the gate works.
 
-- _awaiting run_
+## 6. Main problems discovered (demonstrated)
 
-## 6. Main problems discovered
+1. **Generator hallucination (primary)**: real Qwen, from the grounded
+   context, produced concepts for a film that does not exist in the facts
+   (family drama) and cites evidence with 0% ground truth (all 18 × 0/3).
+2. **Evidence phrasing not anchored to the vocabulary**: the model never
+   reused the provided known-objects/locations terms as verbatim claims.
+3. **Matcher brittleness (secondary)**: all-token phrase match + substring
+   `is_grounded` distort coverage for partly-real concepts.
 
-- _awaiting run_
+## 7. Fix required (per task: ONLY the demonstrated problems)
 
-## 7. Code changes made as a result
-
-- _awaiting run_
+- Strengthen the **generation prompt + context** so `required_evidence` MUST be
+  drawn verbatim from the provided known objects/locations/tokens (as
+  single claims), and explicitly forbid inventing scenes/characters/objects.
+- Keep the strict evidence gate (it is proven correct).
+- Re-calibrate matching only to help genuinely-present evidence
+  (single-token noun evidence + scene-internal token check), never to admit
+  ungrounded claims.
+- Re-run the Colab notebook; iterate until grounded concepts survive.
 
 ## 8. Tests passed
 
-- _awaiting run_
+272 fast tests (before this fix); targeted matcher/prompt unit tests to be added
+with the fix.
