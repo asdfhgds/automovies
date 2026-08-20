@@ -376,6 +376,72 @@ class TestDeriveRefsFromProse:
         assert scenes[0]["scene_id"] == "scene-1"
 
 
+class TestDeriveRefsResistsStopwordLeak:
+    """Regression: the real-Qwen T4 run produced IDENTICAL generic refs for
+    every concept because ``derive_refs`` matched on raw tokens — stopwords
+    like "in"/"with" inside a vocabulary phrase ("man IN plaid shirt", "counter
+    WITH various items") fired against ordinary prose containing the same
+    function word. Six hallucinated theses (about a clock / revolver / drawing
+    that exist in NO scene) all reported HIGH/HIGH coverage.
+
+    Derivation must match only SIGNIFICANT (content) tokens: a concept whose
+    prose mentions none of a phrase's real content words derives nothing from
+    it, even when the prose contains "in" / "with" / "a"."""
+
+    def _concept(self, thesis, visual):
+        return {
+            "title": "T", "hook": "the camera hovers over a quiet moment",
+            "thesis": thesis, "why_interesting": "w",
+            "visual_opportunity": visual,
+        }
+
+    def test_no_derived_ref_via_shared_function_word(self, analyzer):
+        # The exact T4 pattern: a thesis about a "cracked clock" — an object
+        # that exists in NO scene — must NOT harvest "man in plaid shirt" or
+        # "counter with various items" just because the prose contains "in".
+        concept = self._concept(
+            thesis="the cracked clock in the shop reflects a failing sense of "
+                   "time, as shown by repeated failed attempts to reset it",
+            visual="slow zoom on the cracked face as the hands move forward",
+        )
+        refs = analyzer.derive_refs(concept)
+        values = {r.get("value", "") for r in refs}
+        # The fixture vocabulary has no clock; "man in plaid shirt" is NOT in
+        # this fixture, so this is the generic-leak guard: shared function
+        # words must not fabricate object/location refs for absent objects.
+        assert not any("clock" in v for v in values)
+
+    def test_stopwords_in_vocab_do_not_match_generic_prose(self, analyzer):
+        # "counter with various items" exists in the fixture (scene-3). A
+        # concept about a clock must not match it via the shared word "with"
+        # or "items". It should only be derived when the prose names a content
+        # token of the phrase itself.
+        concept = self._concept(
+            thesis="the cracked clock betrays a decaying sense of time",
+            visual="extreme close-up of the hands turning",
+        )
+        refs = analyzer.derive_refs(concept)
+        values = {r.get("value", "") for r in refs}
+        assert "counter with various items" not in values
+        # ...and the derived refs must still be honest/grounded.
+        for r in refs:
+            assert analyzer._match_ref(r), f"derived ref {r} is not grounded"
+
+    def test_content_token_still_derives_empty_room_concept_rejected(self, analyzer):
+        # An "empty room" thesis whose central object is ABSENT (no "empty"
+        # anywhere) must not be admitted merely because prose contains common
+        # words. There is no empty-room object in the fixture.
+        concept = self._concept(
+            thesis="a room labelled empty while a shadow remains visible",
+            visual="framing of the room with no figures",
+        )
+        refs = analyzer.derive_refs(concept)
+        assert not any("room" in str(r.get("value", "")) for r in refs)
+        ev = analyzer.concept_evidence({"thesis": concept["thesis"],
+                                        "evidence_refs": refs})
+        assert analyzer.is_sufficient_refs(ev, min_coverage=0.4) is False
+
+
 # --------------------------------------------------------------------------- #
 # 5. Bounded regeneration: initial batch + single retry, then FAIL
 # --------------------------------------------------------------------------- #

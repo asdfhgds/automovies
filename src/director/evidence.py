@@ -748,13 +748,20 @@ class EvidenceAnalyzer:
         """
         if not concept:
             return []
-        prose = " ".join(
+        prose_raw = " ".join(
             str(concept.get(k) or "")
             for k in ("title", "hook", "thesis", "why_interesting",
                       "visual_opportunity")
         )
-        prose = _tokenize(prose.lower())
+        prose_lower = prose_raw.lower()
+        prose = _tokenize(prose_lower)
+        # Significant (content) tokens only — stopwords like "in"/"with" inside
+        # a vocabulary phrase ("man IN plaid shirt", "counter WITH various
+        # items") must NEVER match generic prose that merely contains the same
+        # function word. Without this, every concept derives the same broad
+        # refs and the gate passes theses about objects absent from the movie.
         prose_set = set(prose)
+        prose_sig_set = set(significant_tokens(prose_raw))
 
         refs: List[Dict[str, Any]] = []
         seen = set()
@@ -772,9 +779,14 @@ class EvidenceAnalyzer:
             seen.add(key)
             refs.append({"kind": kind, "value": value})
 
-        # 1. Scene ids named in the prose (e.g. "scene-1").
+        # 1. Scene ids named in the prose (e.g. "scene-1" / "scene 3").
+        #    Must match on the word-boundary numeric form, NOT a bare
+        #    substring ("scene3" must not match inside "scene30").
+        scene_number_re = re.compile(r"\bscene[\s\-_]*(\d+)\b")
+        mentioned_scene_nums = set(scene_number_re.findall(prose_lower))
         for sid in self.facts.used_scene_ids():
-            if _scene_id_norm(sid) in prose_set or sid.lower() in prose_set:
+            num = _scene_id_norm(sid).lstrip("scene")
+            if num in mentioned_scene_nums or sid.lower() in prose_set:
                 refs.append({"kind": "scene", "scene_id": sid})
                 seen.add(("scene", sid))
 
@@ -798,13 +810,16 @@ class EvidenceAnalyzer:
             for value in values:
                 if len(refs) >= max_refs:
                     break
-                tokens = _tokenize(str(value).lower())
+                tokens = significant_tokens(str(value))
                 if not tokens:
                     continue
-                # Match on ANY significant token so prose that says "saloon"
-                # derives the canonical location "saloon, dim light". The ref
-                # is only emitted after verifying the FULL value grounds.
-                if any(t in prose_set for t in tokens):
+                # Match on ANY significant (content) token so prose that says
+                # "saloon" derives the canonical location "saloon, dim light".
+                # Stopwords are excluded: a vocab phrase like "man IN plaid
+                # shirt" must not fire on prose that merely contains "in".
+                # The ref is only emitted after verifying the FULL value
+                # grounds.
+                if any(t in prose_sig_set for t in tokens):
                     _add_ref(kind, value)
 
         # 3. Ensure at least one scene ref when concrete claims matched.
