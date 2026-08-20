@@ -210,6 +210,61 @@ retrieval human-verdict record is tracked in `reports/`.
      characters, or objects. Keep the strict evidence gate. Recalibrate
      matching only for genuinely-present evidence (single-noun checks; never
      admit ungrounded claims). Add focused unit tests.
+     **DONE (this pass, local suite 319 passing / 3 skipped / 11 deselected):**
+     - **Dynamic worked-grounding example** (`DirectorContextBuilder._grounded_example`,
+       `src/director/context_builder.py`): the embedded `## WORKED EXAMPLE` is
+       now built from the movie's RICHEST citable scene (most objects/actions +
+       theme/mood + location), carries every verbatim ref that scene makes
+       available (proven HIGH/HIGH by the deterministic matcher), and appends a
+       **REJECTED CONTRAST** — a plausible-but-absent phrase (broken clock,
+       kitchen table, ... first one not in the facts) shown as "would FAIL", so
+       the model sees the exact PASS boundary.
+     - **Structured failed-reference feedback** (`EvidenceAnalyzer.ref_feedback`,
+       `src/director/evidence.py` + `build_rejection_prompt(..., ref_feedback=...)`,
+       `src/director/concepts.py`): the regeneration prompt now lists, per
+       NOT-FOUND ref, the ref kind + value AND **VERBATIM candidate identifiers
+       of the same kind** from the movie's actual vocabulary (objects/characters/
+       locations/actions; free-form `text` claims fall back to the concrete
+       on-screen vocabulary). A ref kind with no available vocabulary says
+       "drop this ref entirely" instead of inventing a replacement. Wired
+       through `MovieGroundedDirector._evidence_gate` regeneration
+       (`src/director/grounded.py`).
+     - **Deterministic ref derivation (NEW — the real fix)**:
+       `EvidenceAnalyzer.derive_refs` (`src/director/evidence.py`) stops
+       trusting the model's `evidence_refs` entirely. It scans the concept's
+       OWN prose (title/hook/thesis/why_interesting/visual_opportunity) for the
+       movie's ACTUAL known vocabulary (objects, locations, characters, actions,
+       themes, moods, dialogue, scene ids) and emits only refs whose values are
+       verbatim vocab items that the exact matcher RESOLVES; a scene ref is
+       synthesized from the strongest supporting scene when the prose did not
+       name one. Inventions (kitchen, notebook, father, oven; compound sentences
+       like "father adjusts the oven temperature") derive NOTHING → rejected.
+       The gate now runs on `derive_refs` output
+       (`is_sufficient_refs` + `_classify` in `grounded.py`), and every
+       surviving concept's `evidence_refs`/`required_evidence` are REPLACED
+       with the derived set, so downstream plan/contract carry only grounded
+       claims. Prompts updated to say refs will be auto-derived from prose.
+       5 new regression tests:
+       `tests/test_grounded_evidence_contract.py::TestDeriveRefsFromProse`
+       (grounded object+scene from prose; family-drama/oven/notebook → no refs;
+       compound action not a verbatim identifier; all derived refs match +
+       gate passes; scene ref synthesized). 66→66 local evidence/director
+       tests, and full suite 314→319.
+     - Strict concept + plan gates unchanged (never relaxed).
+
+    **Second real-Qwen T4 run EXECUTED after the first two prompts-only fixes
+    (worked example + structured feedback): STILL FAIL — 0/12 grounded**
+    (`reports/director_reasoning.md`/`director_validation.json` in
+    `data/bc6384be-...`): `example_included: true`, yet the model produced a
+    NEW hallucination (silent-child family drama: kitchen, notebook, watch,
+    door, oven, "free will"/"gloom"/"memory"), and every rejected ref was a
+    compound sentence ("walks alone through forest path", "father adjusts oven
+    temperature", "mother looks at father without speaking") rather than a
+    single verbatim vocabulary item. It even cited REAL scene ids
+    (scene-1/3/4/5) while inventing content around them. Verdict: prompts alone
+    cannot stop a 4B model from writing prose around real scenes with invented
+    nouns — hence derive_refs (above): the model's prose is now the ONLY input,
+    and only vocabulary that actually resolves survives.
   2. **Re-run the real-Qwen validation** on the T4
      (`notebooks/colab_grounded_director_validation.ipynb` →
      `scripts/run_director_validation.py --project data/bc6384be-...`) and

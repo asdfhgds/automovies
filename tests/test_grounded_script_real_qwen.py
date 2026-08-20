@@ -66,6 +66,12 @@ def real_chain():
         duration_sec=90,
     )
     assert result["selected_concept"] is not None, "selectable concept required"
+    if result["plan"] is None:
+        # Strict plan gate: no grounded plan is emitted, so the script chain
+        # must not be forced to proceed from invented prose.
+        pytest.skip("grounded plan was honestly rejected by the strict gate")
+    assert result["plan"]["evidence_strategy"]["scene_ids"], \
+        "grounded plan must map to real scenes"
 
     contract = build_grounding_contract(result, facts, movie_index=idx)
     assert contract_is_valid(contract) == []

@@ -264,6 +264,46 @@ class SceneFacts:
                     out.append(str(o).strip())
         return out
 
+    def known_actions(self) -> List[str]:
+        out, seen = [], set()
+        for s in self.scenes:
+            for a in s.actions:
+                key = str(a).strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    out.append(str(a).strip())
+        return out
+
+    def known_themes(self) -> List[str]:
+        out, seen = [], set()
+        for s in self.scenes:
+            for t in s.themes:
+                key = str(t).strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    out.append(str(t).strip())
+        return out
+
+    def known_moods(self) -> List[str]:
+        out, seen = [], set()
+        for s in self.scenes:
+            for m in _as_list(s.mood):
+                key = str(m).strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    out.append(str(m).strip())
+        return out
+
+    def known_dialogue(self) -> List[str]:
+        out, seen = [], set()
+        for s in self.scenes:
+            for d in s.dialogue:
+                text = str(d.get("text", "")).strip()
+                if text and text.lower() not in seen:
+                    seen.add(text.lower())
+                    out.append(text)
+        return out
+
     # -- Canonical vocabulary (for exact, alias-based grounding) --------------
 
     def _entity_vocabulary(self, items: List[str], owner_getter) -> List[Dict[str, Any]]:

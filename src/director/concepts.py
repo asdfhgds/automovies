@@ -162,16 +162,18 @@ these must appear across the set):
 
 MANDATORY GROUNDING (from the context above):
 1. Separate your CREATIVE CLAIM from your EVIDENCE REFERENCES.
-   title / hook / thesis / why_interesting are interpretation; evidence_refs
-   must ONLY name identifiers that literally appear in the context.
-2. Cite only SCENE ids, characters, objects, locations, actions, themes, moods,
-   or dialogue that actually appear. NEVER invent anyone or anything.
-3. Every evidence_ref must use exact canonical identifiers from WHAT ACTUALLY
-   EXISTS and the scene cards — COPY THE VALUES VERBATIM, character for
-   character (including capitalization), from the lists above. Do not
-   paraphrase them ("child" is not "person", "holds a weapon" is not
-   "revolver"). Prefer a scene ref ({{"kind": "scene",
-   "scene_id": "scene-1"}}) whenever a specific scene carries your point.
+   title / hook / thesis / why_interesting are interpretation; the system
+   derives your evidence_refs by scanning that prose for the movie's verbs,
+   objects, locations and characters — so WRITE your thesis/hook IN TERMS OF
+   the identifiers that actually appear in WHAT ACTUALLY EXISTS.
+2. Name concrete, catalogued items in your prose: an object, a location, an
+   action, or a scene id shown in WHAT ACTUALLY EXISTS. If you write only
+   abstract words (memory, gloom, free will) or invented nouns (kitchen,
+   notebook, father), you will be REJECTED because nothing of yours is grounded.
+3. You MAY also fill evidence_refs yourself — they only help if they are exact
+   canonical identifiers from WHAT ACTUALLY EXISTS / the scene cards, copied
+   VERBATIM (character for character). Wrong guesses are simply discarded and
+   replaced by refs derived from your prose.
 4. The matcher is exact and token-based: "son" will NOT match just because
    "person" also appears; an object you cite must literally be listed.
 5. If the movie lacks material for a thesis, do NOT force it. Pick a thesis the
@@ -218,6 +220,7 @@ def build_rejection_prompt(
     rejected: List[Dict[str, Any]],
     substitutes_needed: int,
     ref_failures: Optional[List[List[str]]] = None,
+    ref_feedback: Optional[List[List[Dict[str, Any]]]] = None,
 ) -> str:
     """Prompt to replace concepts that failed evidence grounding.
 
@@ -226,15 +229,46 @@ def build_rejection_prompt(
     ``concept_evidence(concept)["unmatched_claims"]``). Showing the exact
     failed refs gives the model corrective, deterministic feedback instead of a
     vague "your evidence was rejected".
+
+    ``ref_feedback`` (optional, parallel to ``rejected``) is the richer,
+    structured form — per-concept list of ``{"kind", "value", "found",
+    "scenes", "suggestions"}`` records from ``EvidenceAnalyzer.ref_feedback``.
+    When present it takes precedence; each NOT-FOUND ref lists verbatim
+    candidate identifiers so the model replaces the hallucination with a real
+    fact instead of guessing again.
     """
     rejected_lines = []
     for i, c in enumerate(rejected):
         line = (f"- [{c.get('title', '?')}] thesis={c.get('thesis', '')} "
                 f"evidence_refs=[{', '.join(_refs_line(r) for r in concept_refs(c))}]")
-        failures = (ref_failures or [None] * len(rejected))[i]
-        if failures:
-            line += ("\n    These refs were NOT FOUND in the movie, do NOT "
-                     "reuse them: " + ", ".join(failures))
+        if ref_feedback:
+            records = (ref_feedback or [None] * len(rejected))[i]
+            if records:
+                line += "\n    Failed refs (NOT FOUND in the movie; do NOT reuse):"
+                for record in records:
+                    kind = record.get("kind", "text")
+                    value = record.get("value", "")
+                    if record.get("found"):
+                        continue
+                    line += (f"\n      - kind={kind} value={value!r} "
+                             f"[NOT FOUND]")
+                    suggestions = record.get("suggestions") or []
+                    if suggestions:
+                        listed = "; ".join(suggestions[:6])
+                        line += (
+                            f"\n        VERBATIM {kind} candidates in this "
+                            f"movie: {listed}"
+                        )
+                    else:
+                        line += (
+                            f"\n        (no {kind} identifiers exist in this "
+                            "movie — drop this ref entirely)"
+                        )
+        elif ref_failures:
+            failures = (ref_failures or [None] * len(rejected))[i]
+            if failures:
+                line += ("\n    These refs were NOT FOUND in the movie, do NOT "
+                         "reuse them: " + ", ".join(failures))
         rejected_lines.append(line)
     rejected_blob = "\n".join(rejected_lines)
     return f"""
@@ -248,12 +282,14 @@ that are grounded in the actual scenes shown in the context below.
 
 GROUNDING RULES:
 - Keep your CREATIVE CLAIM separate from your evidence_refs.
-- evidence_refs must ONLY use exact canonical identifiers from the context
-  (scene ids, characters, objects, locations, actions, themes, moods, dialogue).
-- Copy each evidence_ref value VERBATIM (character for character) from the
-  scene cards or WHAT ACTUALLY EXISTS. Never paraphrase or reword them.
-- Every replacement concept needs at least one scene ref
-  ({{"kind": "scene", "scene_id": "scene-1"}}).
+- The system DERIVES your evidence_refs by scanning your prose for the movie's
+  actual vocabulary. So write your thesis/hook/visual_opportunity IN TERMS OF
+  the catalogued objects, locations, characters, actions and scene ids in WHAT
+  ACTUALLY EXISTS (copy each identifier verbatim into the prose itself).
+- You may still list evidence_refs — but only exact canonical identifiers from
+  the context; any invented or paraphrased value is discarded automatically.
+- Every replacement concept should mention at least one scene id
+  (e.g. "scene-1") and at least one real object/location/action in its prose.
 - Do not repeat the rejected ideas' theses or their ungrounded refs.
 
 Rejected concepts (do not repeat these):
@@ -457,10 +493,15 @@ def _normalize_concept(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     refs = concept_refs(raw)
-    if not refs:
-        return None  # no evidence ask => can't be grounded
+    # A concept may arrive with NO declared refs: the grounded director derives
+    # deterministic evidence_refs from its prose later. Requiring refs here
+    # would silently drop prose-only (and now salvageable) concepts.
 
-    required = [r for r in (render_ref(x) for x in refs) if r]
+    required = []
+    for x in refs:
+        line = render_ref(x)
+        if line:
+            required.append(line)
 
     concept = {
         "title": title,

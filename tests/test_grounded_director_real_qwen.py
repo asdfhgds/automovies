@@ -74,10 +74,15 @@ def test_real_qwen_produces_grounded_concepts(real_result):
         theses = c.get("thesis", "").lower()
         assert "movie explores violence" not in theses
         assert c.get("required_evidence"), "each concept needs evidence claims"
-    # The selected concept (if any) must have a plan.
+    # The selected concept (if any) must either carry a grounded plan or an
+    # honest strict-gate rejection (plan stays None + deterministic audit).
     if real_result["selected_concept"] is not None:
-        assert real_result["plan"] is not None
-        assert "evidence_strategy" in real_result["plan"]
+        if real_result["plan"] is None:
+            rejection = real_result["plan_rejection"]
+            assert rejection is not None, "rejected plan must record a reason"
+            assert rejection["audit"]["sufficient"] is False
+        else:
+            assert "evidence_strategy" in real_result["plan"]
 
 
 def test_real_qwen_grounding_respects_available_facts(real_result):
@@ -85,7 +90,7 @@ def test_real_qwen_grounding_respects_available_facts(real_result):
     # Every admissible concept must carry real evidence phrases (the gate
     # already ensures coverage >= 0.4); here we additionally confirm the
     # selected concept's evidence_strategy maps onto real scene ids.
-    if real_result["selected_concept"] is not None:
+    if real_result["selected_concept"] is not None and real_result["plan"] is not None:
         strategy = real_result["plan"]["evidence_strategy"]
         assert "scene_ids" in strategy
         assert strategy["scene_ids"], "evidence must map to real scenes"

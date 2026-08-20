@@ -680,6 +680,12 @@ def _run_grounded_director(project_dir, meta_path, movie_metadata, strict,
     if selected is None:
         status["error"] = "grounded director rejected every concept (no usable evidence)"
         return status
+    if result.get("plan") is None:
+        # STRICT PLAN GATE: an ungrounded plan is never emitted nor rendered.
+        reason = (result.get("plan_rejection") or {}).get("reason",
+                   "plan not grounded after bounded corrective retry")
+        status["error"] = f"grounded director rejected the plan: {reason}"
+        return status
 
     # Write the director reasoning report + normalized grounding contract.
     director.write_report(project_dir, result)

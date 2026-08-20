@@ -189,6 +189,68 @@ class TestContextBuilder:
         assert meta.get("example_included", False) is False
         assert "## WORKED EXAMPLE" not in context
 
+    def test_grounded_example_is_dynamic_rich_scene(self, facts, metadata):
+        """The worked example adapts to the film: it is built from the RICHEST
+        citable scene (most objects/actions/theme), not a fixed template, and
+        carries every extra verbatim ref that scene makes available."""
+        cb = DirectorContextBuilder()
+        context, meta = cb.build_concept_generation_context(metadata, facts)
+        seg = context[context.find("## WORKED EXAMPLE"):]
+        obj = seg[seg.find("{"):]
+        obj = obj[:obj.rfind("}") + 1]
+        example = json.loads(obj)
+        refs = example["evidence_refs"]
+        kinds = [r["kind"] for r in refs]
+        # scene-1 is the richest (2 objects, 2 actions, theme, mood, location).
+        assert refs[0] == {"kind": "scene", "scene_id": "scene-1"}
+        objects = [r["value"] for r in refs if r["kind"] == "object"]
+        assert "revolver" in objects and "glass" in objects
+        actions = [r["value"] for r in refs if r["kind"] == "action"]
+        assert "pouring" in actions and "talking" in actions
+        assert "location" in kinds
+        assert "theme" in kinds
+
+    def test_grounded_example_shows_rejected_contrast(self, facts, metadata):
+        """The worked example teaches the PASS boundary: a REJECTED CONTRAST
+        names a plausible-but-absent phrase the exact matcher would reject."""
+        cb = DirectorContextBuilder()
+        context, meta = cb.build_concept_generation_context(metadata, facts)
+        assert "REJECTED CONTRAST" in context
+        assert "appears in NO scene card in this movie" in context
+        # The named contrast phrase must really be absent from the movie facts.
+        contrast = None
+        for candidate in (
+            "broken clock", "kitchen table", "photograph", "apartment",
+            "dinner plate", "red dress",
+        ):
+            if not facts.is_grounded(candidate):
+                contrast = candidate
+                break
+        assert contrast is not None
+        assert f'value="{contrast}"' in context
+
+    def test_grounded_example_contrast_omitted_when_all_candidates_present(self):
+        """If every contrast candidate actually exists in the movie (unusual),
+        the worked example still renders the JSON without the REJECTED block."""
+        scenes = [
+            _scene(
+                "scene-1", 0, 10,
+                actions=["pouring"],
+                objects=["revolver"],
+                themes=["tension"],
+                mood="tense",
+                transcript=(
+                    "broken clock kitchen table photograph apartment "
+                    "dinner plate red dress exists here")
+            ),
+        ]
+        facts = SceneFacts.from_movie_intelligence(scenes=scenes)
+        cb = DirectorContextBuilder()
+        context, meta = cb.build_concept_generation_context(
+            {"title": "All Props"}, facts)
+        assert "REJECTED CONTRAST" not in context
+        assert "## WORKED EXAMPLE" in context
+
     def test_plan_context_has_verbatim_vocab_and_grounded_editorial(self,
                                                                     facts, metadata):
         from director.concepts import concept_refs
@@ -387,6 +449,92 @@ class TestConcepts:
         assert "re-running" in prompt
         assert "Bad" in prompt
 
+    def test_ref_feedback_structured_records(self, facts):
+        analyzer = EvidenceAnalyzer(facts)
+        concept = {
+            "title": "Mixed", "thesis": "claim",
+            "evidence_refs": [
+                {"kind": "scene", "scene_id": "scene-1"},
+                {"kind": "object", "value": "revolver"},
+                {"kind": "object", "value": "broken clock"},
+                {"kind": "action", "value": "tap-dancing"},
+                {"kind": "location", "value": "saloon, dim light"},
+            ],
+        }
+        fb = analyzer.ref_feedback(concept)
+        assert len(fb) == 5
+        by_key = {(r["kind"], r["value"]): r for r in fb}
+        assert by_key[("scene", "scene-1")]["found"] is True
+        assert by_key[("object", "revolver")]["found"] is True
+        assert by_key[("location", "saloon, dim light")]["found"] is True
+        missing = by_key[("object", "broken clock")]
+        assert missing["found"] is False
+        assert "revolver" in missing["suggestions"]
+        assert "glass" in missing["suggestions"]
+        assert missing["scenes"] == []
+        fill = by_key[("action", "tap-dancing")]
+        assert fill["found"] is False
+        assert "pouring" in fill["suggestions"]
+        assert "talking" in fill["suggestions"]
+
+    def test_ref_feedback_unknown_kind_no_forced_suggestions(self, facts):
+        """A ref kind with NO verbatim vocabulary in the movie gets an empty
+        suggestion list (the correction then says 'drop this ref entirely'),
+        never a fake replacement."""
+        no_dialogue = SceneFacts.from_movie_intelligence(scenes=[
+            _scene("scene-1", 0, 10, actions=["pouring"], objects=["glass"])])
+        analyzer = EvidenceAnalyzer(no_dialogue)
+        concept = {
+            "title": "Weird", "thesis": "claim",
+            "evidence_refs": [{"kind": "dialogue", "value": "some line"}],
+        }
+        fb = analyzer.ref_feedback(concept)
+        assert len(fb) == 1
+        assert fb[0]["found"] is False
+        assert fb[0]["suggestions"] == []
+
+    def test_ref_feedback_empty_concept(self, facts):
+        analyzer = EvidenceAnalyzer(facts)
+        assert analyzer.ref_feedback(None) == []
+        assert analyzer.ref_feedback({}) == []
+
+    def test_rejection_prompt_renders_structured_verbatim_suggestions(self):
+        rejected = [{
+            "title": "Bad", "thesis": "claim about a broken clock",
+            "evidence_refs": [{"kind": "object", "value": "broken clock"}],
+        }]
+        feedback = [[{
+            "kind": "object", "value": "broken clock", "found": False,
+            "scenes": [],
+            "suggestions": ["revolver", "glass", "dust", "horse", "water"],
+        }]]
+        prompt = build_rejection_prompt(
+            "CTX", rejected, substitutes_needed=1, ref_feedback=feedback)
+        assert "VERBATIM object candidates in this movie" in prompt
+        assert "revolver" in prompt
+        assert "glass" in prompt
+        assert "broken clock" in prompt
+        # Structured feedback takes precedence over the string fallback.
+        prompt2 = build_rejection_prompt(
+            "CTX", rejected, substitutes_needed=1,
+            ref_failures=[["broken clock"]],
+            ref_feedback=feedback)
+        assert "NOT FOUND" in prompt2
+        assert "VERBATIM object candidates" in prompt2
+
+    def test_rejection_prompt_empty_suggestions_advises_drop_ref(self):
+        rejected = [{
+            "title": "Bad", "thesis": "claim",
+            "evidence_refs": [{"kind": "dialogue", "value": "some line"}],
+        }]
+        feedback = [[{
+            "kind": "dialogue", "value": "some line", "found": False,
+            "scenes": [], "suggestions": [],
+        }]]
+        prompt = build_rejection_prompt(
+            "CTX", rejected, substitutes_needed=1, ref_feedback=feedback)
+        assert "drop this ref entirely" in prompt
+
     def test_plan_prompt_warns_against_invented_terms(self):
         prompt = build_plan_prompt("CTX", grounding_warnings=["chairs", "city"])
         assert "GROUNDING CORRECTION" in prompt
@@ -404,7 +552,8 @@ class TestMemoryIntegration:
     def test_selected_concept_stored(self, facts, metadata, tmp_path):
         mock = MockLLM(concepts=[{
             "title": "Grounded Idea",
-            "hook": "hook", "thesis": "a specific grounded claim",
+            "hook": "hook", "thesis": "a specific grounded claim about the "
+            "revolver on the bar",
             "why_interesting": "w", "required_evidence": ["revolver"],
             "visual_opportunity": "close-up", "format": "short_video_essay",
         }])
@@ -427,7 +576,8 @@ class TestPlanSchema:
     def test_plan_has_required_keys(self, facts, metadata, tmp_path):
         mock = MockLLM(
             concepts=[{
-                "title": "C1", "hook": "h", "thesis": "a specific grounded claim",
+                "title": "C1", "hook": "h", "thesis": "a specific grounded "
+                "claim about the revolver on the bar",
                 "why_interesting": "w", "required_evidence": ["revolver"],
                 "visual_opportunity": "close-up", "format": "short_video_essay",
             }],
@@ -435,8 +585,11 @@ class TestPlanSchema:
                 "concept": {"title": "C1", "hook": "h", "thesis": "s"},
                 "format": {"type": "short_video_essay", "duration_sec": 90},
                 "editorial_direction": {
-                    "pacing": "slow", "visual_style": "wide",
-                    "audio_style": "minimal", "editing_style": "cut",
+                    "pacing": "slow",
+                    "visual_style": "close-up on the revolver and the glass "
+                                    "while the barman pours",
+                    "audio_style": "minimal",
+                    "editing_style": "quiet cuts",
                 },
             },
         )
@@ -505,6 +658,37 @@ class TestMovieGroundedDirector:
                    for c in res["generated_concepts"])
         # The rejected concept is surfaced in the report data.
         assert any(c["title"] == "Bad" for c in res["rejected_concepts"])
+
+    def test_regeneration_prompt_carries_structured_verbatim_suggestions(
+            self, facts, metadata, tmp_path):
+        """End-to-end: when the gate rejects a hallucinated ref, the corrective
+        prompt the model actually receives lists REAL verbatim candidates of the
+        same kind — not just the failed string."""
+        mock = MockLLM(
+            concepts=[{
+                "title": "Xenophobe", "hook": "h", "thesis": "a specific claim "
+                "about alien telepathy controlling minds",
+                "why_interesting": "w",
+                "required_evidence": ["flying saucer", "telepathy beam"],
+                "visual_opportunity": "x", "format": "f",
+            }],
+            regenerate_to=[{
+                "title": "Grounded", "hook": "h",
+                "thesis": "a specific claim about the revolver on the bar",
+                "why_interesting": "w", "required_evidence": ["revolver"],
+                "visual_opportunity": "close-up", "format": "f",
+            }],
+        )
+        director = MovieGroundedDirector(mock, memory_dir=tmp_path / "mem")
+        res = director.develop(metadata, facts, num_concepts=1, min_coverage=0.5)
+        assert any(c["title"] == "Grounded" for c in res["generated_concepts"])
+        calls = mock.calls
+        redo = next((p for p in calls if "re-running" in p), "")
+        assert "VERBATIM" in redo
+        assert "candidates in this movie" in redo
+        assert "revolver" in redo
+        assert "glass" in redo
+        assert "flying saucer" in redo
 
     def test_report_renders_candidates_and_rejected(self, facts, metadata, tmp_path):
         mock = MockLLM(
@@ -609,8 +793,9 @@ class TestMovieGroundedDirector:
         assert "flying" in mock.calls[-1] or "saucer" in mock.calls[-1]
 
     def test_plan_regeneration_bounded_at_one(self, facts, metadata, tmp_path):
-        """If the model keeps hallucinating, we record ONE retry and record the
-        audit honestly rather than looping or silently forcing content."""
+        """If the model keeps hallucinating, we record ONE retry and refuse to
+        emit the plan (strict plan gate): plan stays None with the honest
+        rejection + deterministic audit, never silently forced through."""
 
         class _StubbornLLM:
             def __init__(self):
@@ -643,9 +828,74 @@ class TestMovieGroundedDirector:
                                          memory_dir=tmp_path / "mem")
         res = director.develop(metadata, facts, num_concepts=1, min_coverage=0.4)
         assert res["llm_stats"]["llm_calls"] == 3  # bounded: 1 corrective retry
-        audit = res["plan"]["grounding_audit"]
+        # STRICT PLAN GATE: the plan is not emitted while it stays ungrounded.
+        assert res["plan"] is None
+        rejection = res["plan_rejection"]
+        assert rejection is not None
+        audit = rejection["audit"]
         assert audit["sufficient"] is False  # honestly recorded, not faked
         assert "saucer" in audit["invented_terms"]
+
+    def test_strict_gate_rejects_the_clock_fail_plan(self, facts, metadata,
+                                                     tmp_path):
+        """Regression: the FAIL run invented an ungrounded editorial plan
+        ('hand-to-hand transfers', 'a soft steady hum', 'objects briefly
+        visible before being passed'...) that had NOTHING to do with the real
+        evidence scenes, yet the old pipeline emitted it with a recorded
+        insufficient audit. The strict plan gate must refuse to emit it."""
+
+        class _ClockFailLLM:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(self, prompt):
+                self.calls.append(prompt)
+                if "finalizing the plan" in prompt:
+                    return json.dumps({
+                        "concept": {"title": "C", "hook": "h", "thesis": "s"},
+                        "format": {"type": "short_video_essay",
+                                   "duration_sec": 90},
+                        "editorial_direction": {
+                            "pacing": "The pacing follows the rhythm of "
+                                      "hand-to-hand transfers, pausing only "
+                                      "when a hand stops moving, emphasizing "
+                                      "the absence of motion as a point of "
+                                      "stillness.",
+                            "visual_style": "Close-ups of hands placing "
+                                            "objects into other hands, hands "
+                                            "opening and closing, objects "
+                                            "briefly visible before being "
+                                            "passed.",
+                            "audio_style": "Minimal ambient sound. A soft, "
+                                           "steady hum fades in and out with "
+                                           "each hand transfer.",
+                            "editing_style": "Cuts occur precisely at the "
+                                             "moment a hand releases an "
+                                             "object or receives one.",
+                        },
+                    })
+                return json.dumps({"concepts": [{
+                    "title": "C", "hook": "h",
+                    "thesis": "a specific grounded claim about the saloon",
+                    "why_interesting": "w",
+                    "required_evidence": ["revolver"],
+                    "visual_opportunity": "close-up",
+                    "format": "short_video_essay",
+                }]})
+
+        director = MovieGroundedDirector(_ClockFailLLM(),
+                                         memory_dir=tmp_path / "mem")
+        res = director.develop(metadata, facts, num_concepts=1, min_coverage=0.4)
+        # Strict plan gate: the invented plan is NOT emitted.
+        assert res["plan"] is None
+        rejection = res["plan_rejection"]
+        assert rejection is not None
+        audit = rejection["audit"]
+        assert audit["sufficient"] is False
+        # The specific hallucinated vocabulary is caught deterministically.
+        invented = " ".join(audit["invented_terms"])
+        for term in ("transfer", "hum", "objects"):
+            assert term in invented, f"invented term '{term}' must be caught"
 
     def test_write_report_writes_director_reasoning_md(self, facts, metadata, tmp_path):
         """The public write_report alias produces reports/director_reasoning.md."""

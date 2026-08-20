@@ -173,6 +173,7 @@ def main() -> None:
             if not k.startswith("_") and k != "critique"
         },
         "plan": result["plan"],
+        "plan_rejection": result.get("plan_rejection"),
         "diversity_metric": result["diversity_metric"],
     }
     report_dir = project_dir / "reports"
@@ -189,6 +190,7 @@ def main() -> None:
         selected_index=result["selected_concept_index"],
         analyzer=EvidenceAnalyzer(facts),
         plan=result["plan"],
+        plan_rejection=result.get("plan_rejection"),
         diversity_metric=result["diversity_metric"],
     )
     md_path = write_report(project_dir, md)

@@ -45,6 +45,7 @@ from director.concepts import (
     parse_plan,
     is_generic_thesis,
     compute_diversity_metric,
+    render_ref,
 )
 from director.context_builder import DirectorContextBuilder
 from director.critic import ConceptCritic
@@ -123,11 +124,16 @@ class MovieGroundedDirector:
         if selected is not None:
             selected["_evidence"] = analyzer.concept_evidence(selected)
 
-        # 4. Build the scene-aware final plan.
+        # 4. Build the scene-aware final plan. STRICT PLAN GATE: a plan that
+        #    stays ungrounded after the bounded corrective retry is None — it
+        #    is never emitted (no forced content downstream). The rejection is
+        #    recorded with the deterministic audit for the reasoning report.
         plan = None
+        plan_rejection = None
         if selected is not None:
-            plan = self._build_plan(movie_metadata, selected, scale_facts,
-                                    analyzer, duration_sec)
+            plan, plan_rejection = self._build_plan(
+                movie_metadata, selected, scale_facts, analyzer, duration_sec
+            )
 
         # 5. Persist selected concept in creative memory.
         if selected is not None:
@@ -142,6 +148,7 @@ class MovieGroundedDirector:
             "selected_concept": selected,
             "selected_concept_index": selected_index,
             "plan": plan,
+            "plan_rejection": plan_rejection,
             "diversity_metric": diversity,
             "llm_stats": dict(self.stats),
             "_scene_facts": scale_facts,
@@ -159,6 +166,7 @@ class MovieGroundedDirector:
             selected_index=result.get("selected_concept_index"),
             analyzer=analyzer,
             plan=result.get("plan"),
+            plan_rejection=result.get("plan_rejection"),
             diversity_metric=result.get("diversity_metric", 0.0),
         )
         return write_report(Path(project_dir), text)
@@ -173,11 +181,13 @@ class MovieGroundedDirector:
         self, context: str, num_concepts: int,
         reject_previous: Optional[List[Dict[str, Any]]],
         ref_failures: Optional[List[List[str]]] = None,
+        ref_feedback: Optional[List[List[Dict[str, Any]]]] = None,
     ) -> List[Dict[str, Any]]:
         if reject_previous:
             prompt = build_rejection_prompt(
                 context, reject_previous, num_concepts,
                 ref_failures=ref_failures,
+                ref_feedback=ref_feedback,
             )
         else:
             prompt = build_generation_prompt(context, num_concepts)
@@ -204,6 +214,14 @@ class MovieGroundedDirector:
     ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Keep concepts with real evidence; reject + regenerate the rest.
 
+        The gate runs on **deterministic evidence refs derived from each
+        concept's prose** (``EvidenceAnalyzer.derive_refs``) — never on the
+        model's declared refs, which are advisory at best and hallucinated at
+        worst. A concept survives only if its own prose mentions actual movie
+        vocabulary that resolves to real scenes. Survivors get their
+        ``evidence_refs`` / ``required_evidence`` REPLACED with the derived set
+        so the downstream plan/contract carry only grounded claims.
+
         ``rejected`` accumulates every concept that was ever rejected across the
         regneration rounds (so the reasoning report can show them), while only
         concepts that remain admissible survive. If regeneration can't find a
@@ -213,22 +231,39 @@ class MovieGroundedDirector:
         admissible: List[Dict[str, Any]] = []
         rejected: List[Dict[str, Any]] = []
 
-        def _admissible(c):
-            if is_generic_thesis(c.get("thesis", "")):
-                return False
-            return analyzer.is_sufficient(c, min_coverage=min_coverage)
+        def _classify(batch):
+            """Derive refs per concept; split into admissible vs pending."""
+            batch_admissible: List[Dict[str, Any]] = []
+            batch_rejected: List[Dict[str, Any]] = []
+            for c in batch:
+                derived = analyzer.derive_refs(c)
+                c["_derived_refs"] = derived
+                ev = analyzer.concept_evidence(
+                    {"thesis": c.get("thesis", ""), "evidence_refs": derived})
+                if (is_generic_thesis(c.get("thesis", ""))
+                        or not analyzer.is_sufficient_refs(
+                            ev, min_coverage=min_coverage)):
+                    batch_rejected.append(c)
+                else:
+                    c["_derived_ev"] = ev
+                    batch_admissible.append(c)
+            return batch_admissible, batch_rejected
 
-        # First pass: classify.
-        pending: List[Dict[str, Any]] = []
-        for c in concepts:
-            (admissible if _admissible(c) else pending).append(c)
+        admissible_batch, pending = _classify(concepts)
         rejected.extend(pending)
+        admissible: List[Dict[str, Any]] = list(admissible_batch)
 
         # Regenerate substitutes for pending ones, up to max_rounds times.
         rounds = 0
         while pending and rounds < max_rounds:
+            def _ref_feedback(concepts):
+                """Per-concept structured failed-ref feedback (kind, value,
+                found flag, verbatim replacement suggestions)."""
+                return [analyzer.ref_feedback(c) for c in concepts]
+
             def _ref_failures(concepts):
-                """Per-concept list of rendered refs that did NOT match."""
+                """Per-concept list of rendered refs that did NOT match
+                (legacy string fallback for callers without structured data)."""
                 out = []
                 for c in concepts:
                     ev = analyzer.concept_evidence(c)
@@ -237,13 +272,21 @@ class MovieGroundedDirector:
 
             substitutes = self._generate(context, len(pending),
                                          reject_previous=pending,
-                                         ref_failures=_ref_failures(pending))
-            pending = []
-            for sub in substitutes:
-                (admissible if _admissible(sub) else pending).append(sub)
+                                         ref_failures=_ref_failures(pending),
+                                         ref_feedback=_ref_feedback(pending))
+            sub_ok, pending = _classify(substitutes)
+            admissible.extend(sub_ok)
             rejected.extend(pending)
             rounds += 1
 
+        # Adopt the deterministic refs on every survivor.
+        for c in admissible:
+            refs = c.pop("_derived_refs", []) or []
+            c["evidence_refs"] = refs
+            c["required_evidence"] = [
+                render_ref(r) for r in refs if render_ref(r)
+            ]
+            c.pop("_derived_ev", None)
         return admissible, rejected
 
     def _select(
@@ -272,7 +315,14 @@ class MovieGroundedDirector:
         scene_facts: SceneFacts,
         analyzer: EvidenceAnalyzer,
         duration_sec: int,
-    ) -> Dict[str, Any]:
+    ) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Build the scene-aware plan (deterministic concept + grounded prose).
+
+        Returns ``(plan, None)`` on success, or ``(None, rejection)`` when the
+        plan's editorial_direction cannot be grounded after the bounded
+        corrective retry. A rejected plan is NEVER emitted downstream — the
+        strict plan gate mirrors the concept gate's honest FAIL.
+        """
         evidence_strategy = analyzer.build_evidence_strategy(selected)
         plan_ctx = self.context_builder.build_plan_context(
             selected, scene_facts, evidence_strategy.get("scene_ids", [])
@@ -283,7 +333,7 @@ class MovieGroundedDirector:
         # Deterministically audit the plan's editorial_direction against the
         # evidence scenes. If the model invented concrete content (scope leak
         # or outright hallucination), do ONE bounded corrective retry with the
-        # exact offending terms fed back — never more, never forced through.
+        # exact offending terms fed back — never more.
         audit = analyzer.plan_grounding(
             plan.get("editorial_direction"), scene_ids,
         )
@@ -297,6 +347,19 @@ class MovieGroundedDirector:
             audit = analyzer.plan_grounding(
                 plan.get("editorial_direction"), scene_ids,
             )
+
+        if not audit["sufficient"]:
+            # STRICT PLAN GATE: not grounded -> not emitted, like the concept
+            # gate's honest FAIL. The rejection (with the deterministic audit)
+            # is surfaced so the reasoning report shows exactly why.
+            rejection = {
+                "reason": "plan editorial_direction not sufficient after "
+                          "bounded corrective retry (strict plan gate)",
+                "audit": audit,
+                "evidence_scene_ids": scene_ids,
+            }
+            return None, rejection
+
         plan["grounding_audit"] = audit
         plan.setdefault("format", {"type": "short_video_essay",
                                    "duration_sec": duration_sec})
@@ -312,7 +375,7 @@ class MovieGroundedDirector:
         }
         # The evidence_strategy is deterministic, not model-invented.
         plan["evidence_strategy"] = evidence_strategy
-        return plan
+        return plan, None
 
     def _plan_once(
         self,

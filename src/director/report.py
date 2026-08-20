@@ -30,6 +30,7 @@ def build_report(
     selected_index: Optional[int],
     analyzer: EvidenceAnalyzer,
     plan: Optional[Dict[str, Any]] = None,
+    plan_rejection: Optional[Dict[str, Any]] = None,
     diversity_metric: float = 0.0,
 ) -> str:
     """Render the full director reasoning report."""
@@ -61,6 +62,9 @@ def build_report(
                 _line("Thesis", concept.get("thesis", "")),
                 _line("Claim coverage", f"{ev['claim_coverage']} "
                       f"({ev['claim_matched']}/{max(1, len(ev['claim_refs']))} claim refs matched)"),
+                _line("Concrete grounded claims",
+                      str(ev["concrete_matched"]) + " (object/character/location/"
+                      "action/event/dialogue — moods/themes don't count)"),
                 "",
             ]
             if ev["claim_missing_refs"]:
@@ -105,6 +109,25 @@ def build_report(
                         audit["elsewhere_terms"])))
                 lines.append(_line("Plan grounded",
                                    "yes" if audit.get("sufficient") else "NO"))
+        elif plan_rejection:
+            lines.append("")
+            lines.append("  PLAN REJECTED (strict plan gate — not emitted):")
+            audit = plan_rejection.get("audit") or {}
+            lines.append(_line("Reason", plan_rejection.get("reason", "")))
+            if audit.get("coverage") is not None:
+                lines.append(
+                    _line("Coverage", f"{audit['coverage']:.0%} "
+                          f"(min {audit.get('min_coverage', 0.55):.0%})"))
+            if audit.get("invented_terms"):
+                lines.append(_line("Invented terms", ", ".join(
+                    audit["invented_terms"])))
+            if audit.get("elsewhere_terms"):
+                lines.append(_line("Out-of-scope terms", ", ".join(
+                    audit["elsewhere_terms"])))
+            ev = selected.get("_evidence")
+            if ev and ev.get("supporting_scene_ids"):
+                lines.append(_line("Supporting scenes", ", ".join(
+                    ev["supporting_scene_ids"])))
 
     return "\n".join(lines)
 
@@ -126,11 +149,15 @@ def _candidate_section(tag: str, concept: Dict[str, Any], analyzer: EvidenceAnal
         "",
     ]
     section += [f"  {ln}" if ln else "" for ln in preview.splitlines()]
+    section += [_line("Feasibility score", _format_score(score))]
+    ev = analyzer.concept_evidence(concept)
+    section.append(_line(
+        "Concrete grounded claims",
+        f"{ev['concrete_matched']} (object/character/location/action/event/"
+        f"dialogue — moods/themes don't count)"))
     section += [
-        "",
-        f"  Feasibility score: {_format_score(score)}",
-        f"  Strengths: {', '.join(strengths) or '—'}",
-        f"  Weaknesses: {', '.join(weaknesses) or '—'}",
+        _line("Strengths", ", ".join(strengths) or "—"),
+        _line("Weaknesses", ", ".join(weaknesses) or "—"),
         "",
     ]
     return section

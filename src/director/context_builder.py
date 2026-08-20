@@ -102,15 +102,20 @@ class DirectorContextBuilder:
         meta[meta_key] = included
         return kept
 
-    def _grounded_example(self, scene_facts: SceneFacts) -> Optional[str]:
+    def _grounded_example(self, scene_facts: SceneFacts) -> str:
         """A worked, fully-grounded example concept built ONLY from real facts.
 
-        Picks a scene with an object + action + theme/mood actually on record,
-        then renders a complete concept whose evidence_refs are guaranteed to
-        resolve (they are copied verbatim from the same ``SceneFacts`` the
-        analyst will check against). Returns None if the movie has so few facts
-        that no scene can support an object + action + theme example.
+        Unlike a hardcoded template this example is *dynamic*: it picks the
+        scene with the richest citable facts (most objects + actions + theme /
+        mood), renders a complete concept whose ``evidence_refs`` are copied
+        verbatim from that scene's own cards, and appends a **rejected
+        contrast** — a plausible-but-absent ref the exact matcher WOULD reject —
+        so the model sees the PASS/FAIL boundary. Returns an empty string when
+        no scene can support an object + action + theme/mood example.
         """
+        # Pick the scene with the most citable fact kinds (richness, not order).
+        best = None
+        best_score = -1
         for sf in scene_facts:
             objects = [o for o in sf.objects if str(o).strip()]
             actions = [a for a in sf.actions if str(a).strip()]
@@ -122,32 +127,72 @@ class DirectorContextBuilder:
                 themes[0] if themes else "")
             if not mood:
                 continue
-            refs = [
-                {"kind": "scene", "scene_id": sf.scene_id},
-                {"kind": "object", "value": objects[0]},
-                {"kind": "action", "value": actions[0]},
-                {"kind": "theme", "value": themes[0] if themes else mood},
-            ]
-            example = {
-                "title": f"The story of the {objects[0]}",
-                "hook": f"Start with {objects[0]} already on screen.",
-                "thesis": (
-                    f"{objects[0]} unlocks the {mood} mood in {sf.scene_id} "
-                    f"through {actions[0]}."
-                ),
-                "why_interesting": (
-                    "Every element here (scene, object, action, theme/mood) is "
-                    "copied VERBATIM from the scene cards above; a matching "
-                    "matcher accepts it."
-                ),
-                "evidence_refs": refs,
-                "visual_opportunity": f"Give {objects[0]} a close-up while "
-                                       f"someone does {actions[0]}.",
-                "format": "short_video_essay",
-                "diversity_angle": "grounding example — do not reuse verbatim",
-            }
-            return json.dumps(example, indent=2)
-        return None
+            score = len(objects) + len(actions) + (1 if mood else 0) + \
+                (1 if sf.location else 0)
+            if score > best_score:
+                best_score = score
+                best = sf
+        if best is None:
+            return ""
+        sf = best
+        objects = [o for o in sf.objects if str(o).strip()]
+        actions = [a for a in sf.actions if str(a).strip()]
+        themes = list(dict.fromkeys(
+            t for t in sf.themes if str(t).strip()))
+        mood = sf.mood if str(sf.mood or "").strip() else themes[0]
+        refs = [
+            {"kind": "scene", "scene_id": sf.scene_id},
+            {"kind": "object", "value": objects[0]},
+            {"kind": "action", "value": actions[0]},
+            {"kind": "theme", "value": themes[0] if themes else mood},
+        ]
+        if len(objects) > 1:
+            refs.append({"kind": "object", "value": objects[1]})
+        if len(actions) > 1:
+            refs.append({"kind": "action", "value": actions[1]})
+        if sf.location and str(sf.location).strip():
+            refs.append({"kind": "location", "value": str(sf.location).strip()})
+        example = {
+            "title": f"The story of the {objects[0]}",
+            "hook": f"Start with {objects[0]} already on screen.",
+            "thesis": (
+                f"{objects[0]} unlocks the {mood} mood in {sf.scene_id} "
+                f"through {actions[0]}."
+            ),
+            "why_interesting": (
+                "Every element here (scene, object, action, theme/mood) is "
+                "copied VERBATIM from the scene cards above; the exact matcher "
+                "accepts it."
+            ),
+            "evidence_refs": refs,
+            "visual_opportunity": f"Give {objects[0]} a close-up while "
+                                   f"someone does {actions[0]}.",
+            "format": "short_video_essay",
+            "diversity_angle": "grounding example — do not reuse verbatim",
+        }
+
+        # Deterministic REJECTED contrast: a real-but-absent phrase. We try a
+        # few likely hallucination words; the first that no scene contains is
+        # shown as the "would FAIL" case, so the model sees the pass boundary.
+        contrast = None
+        for candidate in (
+            "broken clock", "kitchen table", "photograph", "apartment",
+            "dinner plate", "red dress",
+        ):
+            if not scene_facts.is_grounded(candidate):
+                contrast = candidate
+                break
+        example_txt = json.dumps(example, indent=2)
+        if not contrast:
+            return example_txt
+        return (
+            example_txt + "\n\n"
+            "REJECTED CONTRAST (do NOT copy this pattern):\n"
+            '  evidence_ref kind=object value="' + contrast + '"\n'
+            '  Reason: "' + contrast + '" appears in NO scene card in this '
+            "movie, so the exact matcher REJECTS it. Only cite identifiers "
+            "listed verbatim in the scene cards / WHAT ACTUALLY EXISTS."
+        )
 
     def build_concept_generation_context(
         self,

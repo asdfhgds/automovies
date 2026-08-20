@@ -38,6 +38,14 @@ COVERAGE_HIGH = "HIGH"
 COVERAGE_MEDIUM = "MED"
 COVERAGE_LOW = "LOW"
 
+#: Claim ref kinds that ground on CONCRETE on-screen content (objects,
+#: characters, locations, actions, events, dialogue). Moods and themes are
+#: interpretation, not content — a concept grounded ONLY on those (e.g.
+#: ``"calm"`` / ``"dark"`` matching a dozen scenes) must not carry a run.
+CONCRETE_CLAIM_KINDS = frozenset({
+    "character", "object", "location", "action", "event", "dialogue",
+})
+
 
 #: Editorial/craft vocabulary allowed in plan ``editorial_direction`` prose.
 #: These describe HOW to cut / score / frame the essay, never claims about
@@ -114,6 +122,17 @@ class EvidenceAnalyzer:
         self._scene_tokens = {
             sid: set(_tokenize(txt)) for sid, txt in self._scene_text.items()
         }
+        # Concrete-only facts per scene (objects / characters / locations /
+        # actions / visual_events / dialogue / visual_description / transcript
+        # — NOT mood / theme / emotional_cues / cinematography). Used so a
+        # concept grounded ONLY on abstract moods/themes cannot carry a run.
+        self._scene_concrete_text = {
+            sf.scene_id: self._concrete_fact_text(sf) for sf in scene_facts
+        }
+        self._scene_concrete_tokens = {
+            sid: set(_tokenize(txt))
+            for sid, txt in self._scene_concrete_text.items()
+        }
         self._synonym_map = dict(SYNONYM_ALIASES)
         if synonym_map:
             self._synonym_map.update(synonym_map)
@@ -143,6 +162,44 @@ class EvidenceAnalyzer:
         return index
 
     # -- Matching primitives -------------------------------------------------
+
+    @staticmethod
+    def _concrete_fact_text(sf: "SceneFact") -> str:
+        """Facts that name on-screen CONTENT (not abstract moods/themes)."""
+        parts = [
+            sf.transcript,
+            sf.dialogue_text,
+            sf.location or "",
+            " ".join(sf.characters),
+            " ".join(sf.actions),
+            " ".join(sf.objects),
+            " ".join(sf.visual_events),
+            sf.visual_description or "",
+        ]
+        return " ".join(parts)
+
+    def _claim_is_concrete(self, ref: Dict[str, Any], scenes: List[str]) -> bool:
+        """True when a matched claim grounds on concrete on-screen content.
+
+        A ref of a concrete kind (object/character/location/action/event/
+        dialogue) is concrete by definition. A free-form text ref is concrete
+        only if every significant token of its value literally appears in the
+        CONCRETE facts of one of its matched scenes (so ``"calm"`` tag as a
+        mood does NOT count even if a mood field contains it).
+        """
+        kind = ref.get("kind", "text")
+        if kind in CONCRETE_CLAIM_KINDS:
+            return True
+        if kind != "text":
+            return False
+        tokens = significant_tokens(ref.get("value") or "")
+        if not tokens:
+            return False
+        for sid in scenes:
+            conc = self._scene_concrete_tokens.get(sid, set())
+            if all(t in conc for t in tokens):
+                return True
+        return False
 
     def _scene_ids_for_entity(self, kind: str, alias: str) -> List[str]:
         """Scene ids for an exact canonical/alias hit in the vocabulary."""
@@ -272,6 +329,11 @@ class EvidenceAnalyzer:
         claim_ratio = len(claim_matched) / claim_total if claim_refs else 0.0
         claim_coverage = self._coverage_label(claim_ratio, has_claims=bool(claim_refs))
 
+        # Concrete grounded claims — on-screen content, not mere moods/themes.
+        concrete_matched = [
+            r for r in claim_matched if self._claim_is_concrete(r, r.get("matched_scenes", []))
+        ]
+
         character_focus = [
             str(r["value"]) for r in matched_refs
             if r.get("kind") == "character" and r.get("value")
@@ -305,6 +367,8 @@ class EvidenceAnalyzer:
             "claim_matched": len(claim_matched),
             "claim_ratio": round(claim_ratio, 2),
             "claim_coverage": claim_coverage,
+            "concrete_matched_refs": concrete_matched,
+            "concrete_matched": len(concrete_matched),
             "character_focus": character_focus,
             "visual_motifs": visual_motifs,
             "supporting_scene_ids": scenes_seen,
@@ -369,13 +433,18 @@ class EvidenceAnalyzer:
         concept: Dict[str, Any],
         min_coverage: float = 0.4,
         required_evidence: Optional[List[str]] = None,
+        require_concrete: bool = True,
     ) -> bool:
         """A concept is admissible only if its CLAIM refs (everything except
         scene ids) resolve to real scenes at or above ``min_coverage``.
 
         Bare scene-id refs prove nothing about the concept's claims, so they do
         not count toward admissibility. A concept also needs at least one
-        matched scene to build a plan against.
+        matched scene to build a plan against. When ``require_concrete`` is
+        true (the milestone default) at least ONE matched claim must ground on
+        concrete on-screen content (object / character / location / action /
+        event / dialogue) — a concept backed only by moods/themes cannot carry
+        a run.
         """
         ev = self.concept_evidence(concept, required_evidence=required_evidence)
         if not ev["claim_refs"]:
@@ -383,6 +452,8 @@ class EvidenceAnalyzer:
         if ev["claim_ratio"] < min_coverage:
             return False
         if not ev["supporting_scene_ids"]:
+            return False
+        if require_concrete and ev["concrete_matched"] < 1:
             return False
         return True
 
@@ -563,3 +634,213 @@ class EvidenceAnalyzer:
             for ref in ev["missing_refs"]:
                 lines.append(f"- {render_ref(ref)}")
         return "\n".join(lines)
+
+    # -- Structured failed-reference feedback ------------------------------
+
+    def ref_feedback(
+        self, concept: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Structured per-ref feedback so corrections are deterministic.
+
+        For EVERY requested ref returns a record: ``{"kind", "value", "found",
+        "scenes", "suggestions"}`` where ``suggestions`` for a NOT-FOUND ref
+        lists verbatim identifiers of the same ``kind`` from the movie's actual
+        vocabulary (a scene id, an on-screen object, an action, a location, a
+        character, a theme, a mood, or dialogue lines). The corrective prompt
+        renders this so the model can swap a hallucinated value for a real one
+        instead of guessing again.
+        """
+        if not concept:
+            return []
+        ev = self.concept_evidence(concept)
+        out: List[Dict[str, Any]] = []
+        for ref in ev["requested_refs"]:
+            kind = str(ref.get("kind") or "text")
+            value = ref.get("value") or ref.get("scene_id") or ""
+            matches = ev.get("matched_refs") or []
+            matches = [
+                m for m in matches
+                if m.get("kind") == ref.get("kind")
+                and m.get("matched_scenes")
+            ]
+            if ref.get("kind") == "scene":
+                matched = next(
+                    (
+                        m for m in matches
+                        if (m.get("scene_id") or m.get("value"))
+                        == (ref.get("scene_id") or ref.get("value"))
+                    ),
+                    None,
+                )
+            else:
+                matched = next(
+                    (
+                        m for m in matches
+                        if m.get("value") == ref.get("value")
+                    ),
+                    None,
+                )
+            record: Dict[str, Any] = {
+                "kind": kind,
+                "value": value,
+                "found": matched is not None,
+                "scenes": list(matched["matched_scenes"]) if matched else [],
+                "suggestions": [],
+            }
+            if not matched:
+                record["suggestions"] = self._verbatim_suggestions(kind)
+            out.append(record)
+        return out
+
+    def _verbatim_suggestions(self, kind: str, limit: int = 8) -> List[str]:
+        """Verbatim identifiers of the requested kind from the movie's facts."""
+        kind = str(kind).lower()
+        pools = {
+            "scene": self.facts.used_scene_ids(),
+            "object": self.facts.known_objects(),
+            "character": self.facts.known_characters(),
+            "location": self.facts.known_locations(),
+            "action": self.facts.known_actions(),
+            "theme": self.facts.known_themes(),
+            "mood": self.facts.known_moods(),
+            "dialogue": self.facts.known_dialogue(),
+        }
+        pool = pools.get(kind)
+        # free-form "text" claims carry no kind of their own; offer the movie's
+        # concrete on-screen vocabulary (objects/characters/locations/actions)
+        # so the model can cite something real instead of guessing again.
+        if pool is None and kind in ("text", "claim", ""):
+            pool = (
+                self.facts.known_objects()
+                + self.facts.known_characters()
+                + self.facts.known_locations()
+                + self.facts.known_actions()
+            )
+        pool = pool or []
+        # Prefer short, concrete items so the model picks a citable identifier.
+        pool = [str(p).strip() for p in pool if str(p).strip()]
+        pool.sort(key=lambda p: (len(p.split()), p))
+        return pool[:limit]
+
+    # -- Deterministic ref derivation (the model is not trusted here) -------
+
+    def derive_refs(
+        self,
+        concept: Dict[str, Any],
+        max_refs: int = 6,
+        prefer_concrete: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Synthesize ``evidence_refs`` deterministically from the concept's own
+        prose (title / hook / thesis / why_interesting / visual_opportunity) —
+        never from the model's declared refs.
+
+        This is the core anti-hallucination fix: a weak generator writes prose
+        like "the child walks into the forest" and *claims* refs that don't
+        exist. Derivation instead scans the prose for the movie's ACTUAL known
+        vocabulary (objects, locations, characters, actions, themes, moods,
+        dialogue, scene ids) and emits only verbatim, groundable refs. If the
+        prose mentions an invented noun (kitchen, notebook, father...), no ref
+        is emitted for it because it is not in the vocabulary.
+
+        If the prose does not name a scene id but matched some concrete
+        vocabulary, a scene ref for the strongest supporting scene is appended
+        so the concept always has an anchor for the plan.
+        """
+        if not concept:
+            return []
+        prose = " ".join(
+            str(concept.get(k) or "")
+            for k in ("title", "hook", "thesis", "why_interesting",
+                      "visual_opportunity")
+        )
+        prose = _tokenize(prose.lower())
+        prose_set = set(prose)
+
+        refs: List[Dict[str, Any]] = []
+        seen = set()
+
+        def _add_ref(kind: str, value: str, scenes_ok: bool = True) -> None:
+            if scenes_ok and not self._match_ref({
+                    "kind": kind, "value": value}):
+                return  # never emit a claim the movie cannot actually support
+            value = str(value).strip()
+            if not value:
+                return
+            key = (kind, value.lower())
+            if key in seen:
+                return
+            seen.add(key)
+            refs.append({"kind": kind, "value": value})
+
+        # 1. Scene ids named in the prose (e.g. "scene-1").
+        for sid in self.facts.used_scene_ids():
+            if _scene_id_norm(sid) in prose_set or sid.lower() in prose_set:
+                refs.append({"kind": "scene", "scene_id": sid})
+                seen.add(("scene", sid))
+
+        # 2. Concrete vocabulary the prose actually mentions: objects,
+        #    locations, characters, actions (checked first when preferred).
+        concrete = [
+            ("object", self.facts.known_objects()),
+            ("location", self.facts.known_locations()),
+            ("character", self.facts.known_characters()),
+            ("action", self.facts.known_actions()),
+        ]
+        abstract = [
+            ("theme", self.facts.known_themes()),
+            ("mood", self.facts.known_moods()),
+            ("dialogue", self.facts.known_dialogue()),
+        ]
+        order = concrete + abstract
+        for kind, values in order:
+            if len(refs) >= max_refs:
+                break
+            for value in values:
+                if len(refs) >= max_refs:
+                    break
+                tokens = _tokenize(str(value).lower())
+                if not tokens:
+                    continue
+                # Match on ANY significant token so prose that says "saloon"
+                # derives the canonical location "saloon, dim light". The ref
+                # is only emitted after verifying the FULL value grounds.
+                if any(t in prose_set for t in tokens):
+                    _add_ref(kind, value)
+
+        # 3. Ensure at least one scene ref when concrete claims matched.
+        if not any(r.get("kind") == "scene" for r in refs):
+            supporting: List[str] = []
+            for r in refs:
+                for sid in self._match_ref(r):
+                    if sid not in supporting:
+                        supporting.append(sid)
+            if supporting:
+                # Prefer the scene supporting the most claims.
+                counts: Dict[str, int] = {}
+                for r in refs:
+                    for sid in self._match_ref(r):
+                        counts[sid] = counts.get(sid, 0) + 1
+                if counts:
+                    top = max(counts, key=counts.get)
+                    refs.append({"kind": "scene", "scene_id": top})
+
+        return refs[:max_refs]
+
+    def is_sufficient_refs(
+        self,
+        ev: Dict[str, Any],
+        min_coverage: float = 0.4,
+        require_concrete: bool = True,
+    ) -> bool:
+        """Admissibility test on a PRE-computed ``concept_evidence`` dict
+        (from derived refs) instead of a raw concept — the gate runs on the
+        deterministic refs, never on the model's declared ones."""
+        if not ev.get("claim_refs"):
+            return False
+        if ev["claim_ratio"] < min_coverage:
+            return False
+        if not ev["supporting_scene_ids"]:
+            return False
+        if require_concrete and ev["concrete_matched"] < 1:
+            return False
+        return True

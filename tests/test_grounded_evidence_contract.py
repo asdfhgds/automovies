@@ -291,6 +291,92 @@ class TestEvidenceContract:
 
 
 # --------------------------------------------------------------------------- #
+# 4b. Deterministic ref derivation from prose (anti-hallucination core)
+# --------------------------------------------------------------------------- #
+
+class TestDeriveRefsFromProse:
+    """The model's declared refs are advisory; evidence_refs are synthesized by
+    scanning the concept's prose for the movie's ACTUAL known vocabulary. This
+    is what makes the generation pipeline impossible to fool with invented
+    nouns (kitchen, notebook, father...) or compound invented actions."""
+
+    def test_derives_grounded_object_and_scene_from_prose(self, analyzer):
+        concept = {
+            "title": "The Revolver",
+            "hook": "Why does the revolver never get fired?",
+            "thesis": "a claim about the revolver sitting on the bar",
+            "why_interesting": "w",
+            "visual_opportunity": "close-up on the glass",
+            # declared refs are IGNORED — they are inventions
+            "required_evidence": ["flying saucer", "telepathy beam"],
+        }
+        refs = analyzer.derive_refs(concept)
+        kinds = {r["kind"] for r in refs}
+        values = {r.get("value", "") for r in refs}
+        assert "object" in kinds
+        assert "revolver" in values
+        assert "glass" in values
+        assert "flying saucer" not in values
+        assert "telepathy beam" not in values
+        assert any(r["kind"] == "scene" for r in refs)
+
+    def test_invented_family_drama_derives_no_refs(self, analyzer):
+        """The exact real-run failure: prose about a fictional family drama
+        (kitchen, notebook, watch, father, oven) must derive NOTHING."""
+        concept = {
+            "title": "The Kitchen as Site of Emotional Containment",
+            "hook": "h",
+            "thesis": "father adjusts the oven temperature while a child "
+                      "writes in a notebook by the door",
+            "why_interesting": "w",
+            "visual_opportunity": "close-up of the oven dial",
+            "required_evidence": ["oven", "notebook"],
+        }
+        assert analyzer.derive_refs(concept) == []
+
+    def test_compound_action_does_not_masquerade_as_verbatim(self, analyzer):
+        """A narrative sentence like 'mother looks at father without speaking'
+        is NOT a vocabulary identifier and must not produce an action ref."""
+        concept = {
+            "title": "T", "hook": "h",
+            "thesis": "the mother looks at the father without speaking",
+            "why_interesting": "w", "visual_opportunity": "x",
+        }
+        refs = analyzer.derive_refs(concept)
+        assert not any(r["kind"] == "action" for r in refs)
+
+    def test_derived_refs_all_match(self, analyzer):
+        """Every derived ref must be groundable — this is the invariant that
+        makes the strict gate pass on REAL (not hallucinated) claims."""
+        concept = {
+            "title": "Saloon", "hook": "h",
+            "thesis": "the saloon barman pours a drink while a rider is "
+                      "waiting outside",
+            "why_interesting": "w",
+            "visual_opportunity": "saloon and the horse in the street",
+        }
+        refs = analyzer.derive_refs(concept)
+        assert refs, "expected at least location/object/action refs"
+        for r in refs:
+            assert analyzer._match_ref(r), f"derived ref {r} is not grounded"
+        # abstract-only concepts fail the concrete gate on derived refs
+        ev = analyzer.concept_evidence({
+            "thesis": concept["thesis"], "evidence_refs": refs})
+        assert analyzer.is_sufficient_refs(ev, min_coverage=0.4) is True
+
+    def test_scene_ref_synthesized_when_absent(self, analyzer):
+        concept = {
+            "title": "Revolver", "hook": "h",
+            "thesis": "a claim centred on the revolver", "why_interesting": "w",
+            "visual_opportunity": "x",
+        }
+        refs = analyzer.derive_refs(concept)
+        scenes = [r for r in refs if r["kind"] == "scene"]
+        assert len(scenes) == 1
+        assert scenes[0]["scene_id"] == "scene-1"
+
+
+# --------------------------------------------------------------------------- #
 # 5. Bounded regeneration: initial batch + single retry, then FAIL
 # --------------------------------------------------------------------------- #
 
@@ -352,8 +438,11 @@ class TestBoundedRegeneration:
                         "format": {"type": "short_video_essay",
                                    "duration_sec": 90},
                         "editorial_direction": {
-                            "pacing": "p", "visual_style": "v",
-                            "audio_style": "a", "editing_style": "e",
+                            "pacing": "slow",
+                            "visual_style": "close-up on the revolver while "
+                                            "the barman talks",
+                            "audio_style": "minimal",
+                            "editing_style": "quiet cuts",
                         },
                     })
                 return json.dumps({"concepts": [{
