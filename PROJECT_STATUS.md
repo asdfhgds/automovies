@@ -1,18 +1,31 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: Movie-grounded Creative Director **real-Qwen run EXECUTED on a
-Colab T4 — VERDICT FAIL**: all 18 generated concepts were rejected (`LOW 0/3`)
-because the generator hallucinated a different film (invented family drama),
-while the rejection gate worked correctly. The Director now reads the existing
-Movie Intelligence (`movie_index.json` → `SceneFacts`), builds a compact
-fact-grounded context, asks real Qwen for 5 diverse concepts, **rejects** any
-concept whose `required_evidence` is not actually present in the scenes, selects
-the strongest grounded concept, and emits a scene-aware director plan
+**Last Updated**: Pre-Colab dry-run of the validation harness is **PROVEN locally**
+via `scripts/run_director_validation.py --mock` with 7 deterministic scenarios
+(`src/director/mock_validation.py`) and 12 harness regression tests
+(`tests/test_director_validation_dryrun.py`), covering cases A–F (valid grounded,
+hallucinated references, valid-thesis/invalid-evidence, hedged location, partial
+coverage, no valid concepts) plus bounded regeneration, strict plan-gate
+rejection, artifact writing, and the exact verdict path. Latest grounding commit:
+`646d4b3` (harness dry-run + regression tests) on top of the grounding fixes
+`e3ad4b6` (`_is_location_confident` — hedged/alternative location labels never
+ground claims), `2c10db9` (thesis claim must ground itself), and `bafb4d3`
+(significant-token matching so stopwords cannot fabricate refs). Full local suite:
+**342 passed, 3 skipped (16 deselected: slow/llm_integration)**. **Real Qwen T4
+validation: PENDING** — next action is
+`scripts/run_director_validation.py --project
+data/bc6384be-47a5-4ee8-8674-7ff861472026` on a Colab T4 with real Qwen.
+
+Historical baseline (pre-fixes real-Qwen run, Colab T4): **VERDICT FAIL** — all
+18 generated concepts were rejected (`LOW 0/3`) because the generator
+hallucinated a different film (invented family drama), while the rejection gate
+worked correctly. The Director now reads the existing Movie Intelligence
+(`movie_index.json` → `SceneFacts`), builds a compact fact-grounded context, asks
+real Qwen for 5 diverse concepts, **rejects** any concept whose
+`required_evidence` is not actually present in the scenes, selects the strongest
+grounded concept, and emits a scene-aware director plan
 (`reports/director_reasoning.md`). Evidence verifier, new retrieval system, and
-script wiring are intentionally **not** implemented. 272 fast tests pass (23 new
-grounded-director tests, incl. 2 run-bookkeeping). **Next action: fix the
-demonstrated generator-hallucination problem (verbatim-vocabulary anchoring),
-then re-run on the T4.**
+script wiring are intentionally **not** implemented.
 
 Prior milestone (kept): Movie Intelligence validation **executed on a real movie**
 + **dense-embedding retrieval layer added and measured**. The real run
@@ -31,7 +44,7 @@ embedder on a Portuguese-dubbed clip only partially bridges narrative queries �
 use `paraphrase-multilingual-MiniLM-L12-v2` for non-English. Full artifacts
 preserved under `data/5398e39c-.../` (gitignored by design — scene cards carry
 the movie's dialogue; the human-verdict record is tracked under `reports/`).
-191 tests pass locally.
+Test suite now 342 passing locally.
 
 ## Executive Summary
 
@@ -51,7 +64,7 @@ The Autonomous Movie Studio project now has a **complete, modular architecture**
 - **Cinematic audio mix**: film-ducking, music-ducking, EBU R128 normalization, true-peak limiter, burned subtitles
 - **Real Qwen script writer** (`script/qwen_writer.py`) integrated into the orchestrator
 - **Provider manifest** (`provider_manifest.json`) recording exactly which providers/models executed
-- **191+ passing tests** (fast suite ~3-4 min) with zero regressions; real-model tests explicitly gated
+- **342+ passing tests** (fast suite ~4-5 min) with zero regressions; real-model tests explicitly gated
 
 ## Current Architecture
 
@@ -486,7 +499,7 @@ python src/main.py run --project-id <id>
   (MiniLM)**: scores 0.02→0.20, tension→scene-30 gun-to-mouth at #2, object→
   stays #1; narrative queries still sub-GOOD (MiniLM is English-only — use the
   multilingual model for non-English clips). 8 new tests.
-- ✅ Local E2E: 191 tests pass (vision, artifacts, retrieval, editorial
+- ✅ Local E2E: 342 tests pass (vision, artifacts, retrieval, editorial
   orchestrator, movie-understanding, semantic-embedding suites); editorial orchestrator test proves all artifacts
 
 ### 1. Timeline-Based Rendering Integration
@@ -637,6 +650,23 @@ actually present in the movie.
 - `reports/director_validation.md` / `.json` (repo root) — human-eval record
   (filled with the FAIL verdict + runtime + matcher audit after the run).
 
+### Pre-Colab harness dry-run (PROVEN)
+- `scripts/run_director_validation.py --mock [--mock-scenario ...]` runs the SAME
+  harness end-to-end with a deterministic mock LLM (no GPU / no Qwen download):
+  project load → `SceneFacts` → `DirectorContextBuilder` → concept generation →
+  grounding → rejection → bounded regeneration → plan → plan grounding → verdict
+  → report writing. `--mock-scenario` covers grounded / hallucinated / invalid /
+  hedged / partial / none / plan_rejected; `--no-mock-plan-grounded` forces the
+  strict plan gate to reject so `plan_rejection` is exercised.
+- Verdicts are deterministic and honest (`_verdict()`): PASS only when a concept
+  was selected AND its plan was grounded and emitted; PLAN_REJECTED when the
+  strict plan gate refused; FAIL when nothing was grounded. No path reports
+  success after a failed grounding stage.
+- Regression tests: `tests/test_director_validation_dryrun.py` (12 tests) assert
+  every case A–F, bounded regeneration counts, artifact presence + content
+  (JSON + reasoning markdown), plan rejection data, summary counts, and the rule
+  that PASS is never reported when grounding is insufficient.
+
 ### Real-Qwen run result (Colab T4) — VERDICT FAIL
 - Timings (measured): Tesla T4, `Qwen/Qwen3-4B-Instruct-2507` (4bit, cuda),
   load 49.03s, 3 LLM calls, 12 substitutes, wall clock 427.05s,
@@ -667,13 +697,19 @@ actually present in the movie.
 - `src/director/grounded.py` — `MovieGroundedDirector` orchestration (+
   `result["llm_stats"]` run bookkeeping: llm_calls / regeneration_rounds /
   substitutes_generated).
+- `src/director/mock_validation.py` — deterministic mock LLM for the validation
+  harness dry-run (7 scenarios).
 - `scripts/run_director_validation.py` — gated real-Qwen Colab validation
   (5 concepts → select → plan → `director_reasoning.md`); now also records the
   `runtime` block (GPU/VRAM, model load time, per-call generation times, call
-  counts, wall clock) into `reports/director_validation.json`.
+  counts, wall clock) into `reports/director_validation.json` and exposes a
+  `--mock` dry-run path with a deterministic `verdict` /
+  `verdict_reason` block.
 - `tests/test_grounded_director.py` (23 tests: context builder, truncation,
   hallucination guard, evidence availability, diversity, rejection, memory,
   plan schema, run bookkeeping).
+- `tests/test_director_validation_dryrun.py` (12 harness regression tests,
+  cases A–F + plan gate + artifacts + counts).
 - `tests/test_grounded_director_real_qwen.py` — gated (`llm_integration`).
 - `notebooks/colab_vision_gpu.ipynb` — added Cell 7d (grounded director); retitled
   Cell 7b doc to make `embedding` the default and flipped `METHOD="embedding"`.
@@ -828,7 +864,7 @@ actually present in the movie.
 
 - **Modified**:
   - Documentation: `PROJECT_STATUS.md` (real-run summary, honest verdicts,
-    real-known-limitations, 191-test count), `DEVELOPMENT_ROADMAP.md`,
+    real-known-limitations, 342-test count), `DEVELOPMENT_ROADMAP.md`,
     `NEXT_MILESTONE.md` (milestone completed with measurements; next bottleneck
     is retrieval semantics + temporal localization)
 
@@ -887,10 +923,27 @@ actually present in the movie.
     director validation on `bc6384be-...`.
   - `reports/director_validation.md` / `.json` — blank human-eval scaffold.
 
+## Files Changed This Session (Pre-Colab Harness Dry-Run)
+
+- **Created**:
+  - `src/director/mock_validation.py` — deterministic scenario mock LLM
+    (grounded / hallucinated / invalid / hedged / partial / none /
+    plan_rejected) that exercises the exact validation pipeline with no GPU.
+  - `tests/test_director_validation_dryrun.py` — 12 harness regression tests
+    (cases A–F, bounded regeneration, plan gate + rejection data, artifact
+    inspection, summary counts, no-PASS-on-ungrounded rule, real-movie dry-run).
+- **Modified**:
+  - `scripts/run_director_validation.py` — `--mock` / `--mock-scenario` /
+    `--no-mock-plan-grounded` options; real or mock provider selection without
+    changing production Qwen behavior; deterministic `_verdict()` (PASS /
+    PLAN_REJECTED / FAIL derived only from pipeline state); `verdict`,
+    `verdict_reason`, `source_provider` added to `director_validation.json`.
+  - Documentation: `PROJECT_STATUS.md`, `NEXT_MILESTONE.md`.
+
 ## Test Results
 
 ```
-272 fast tests ............................ PASS (incl. 23 new grounded-director tests, 2 run-bookkeeping)
+342 fast tests ............................ PASS
 ```
   - 26 Qwen provider tests (incl. placeholder-guard + plain-text fallback)
   - 10 Creative director tests
@@ -907,18 +960,21 @@ actually present in the movie.
   - 10 Movie-intelligence artifact tests (scene_index_v2, movie_memory bundle,
     understanding report, analyzer emits artifacts, vision-field retrieval,
     eval harness reports)
+  - Grounded-director + evidence-contract + planner suites (incl. `derive_refs`,
+    significant-token, thesis-claim, hedged-location, and 12 harness dry-run
+    regression tests)
   - Multi-clip rendering test (FFmpeg) — now with film ducking + subtitles
   - Existing ranking / selection / extraction / timeline tests
 3 skipped (real-TTS GPU tests + real-TTS benchmark — gated behind STUDIO_RUN_REAL_TESTS=1 + CUDA)
-11 deselected (slow / llm_integration)
+16 deselected (slow / llm_integration)
 ─────────────────────────────────────────
-TOTAL: 191 passing, 0 failures
+TOTAL: 342 passing, 0 failures
 
 ## Status for Handoff
 
 ✅ **Architecture**: Complete and validated
 ✅ **Local Development**: Ready on weak laptops
-✅ **Testing**: Comprehensive, fast (191 passing, ~3-4 min)
+✅ **Testing**: Comprehensive, fast (342 passing, ~4-5 min)
 ✅ **Multi-Scene Cut**: Selection, extraction, timeline, render, and QC wired end-to-end
 ✅ **Typed Evidence Selection**: Director-driven evidence typing used by selection
 ✅ **Real Script Provider**: Qwen narration writer integrated into the orchestrator
@@ -948,9 +1004,16 @@ TOTAL: 191 passing, 0 failures
 ✅ **Movie-grounded Creative Director**: reads the existing Movie Intelligence,
    generates 5 diverse concepts with `required_evidence`, rejects unsupported /
    generic ideas, selects the strongest grounded concept, emits a scene-aware
-   plan + `director_reasoning.md`. 272 fast tests pass (23 new grounded-director
-   tests). Real-Qwen clip
-   validation (Colab) is gated/pending execution.
+   plan + `director_reasoning.md`. 342 fast tests pass (23 new grounded-director
+   tests, plus the evidence-contract and harness dry-run suites).
+✅ **Validation-harness dry-run (PROVEN locally)**: `run_director_validation.py
+   --mock` exercises cases A–F end-to-end with deterministic mocks; verdicts
+   PASS/PLAN_REJECTED/FAIL are derived from pipeline state only; regression
+   tests prove bounded regeneration, plan rejection data, artifact writing, and
+   that PASS is never reported when grounding is insufficient.
+⏳ **Real-Qwen clip validation (Colab T4)**: notebook
+   `colab_grounded_director_validation.ipynb` ready; execution on the TG4 with
+   real Qwen is PENDING — the harness dry-run is proven first.
 ⏳ **Real-Movie + Real-TTS GPU run**: notebook `colab_real_movie_tts.ipynb` ready;
    needs a user-supplied legally-owned movie to execute on a T4/A100
 ⏳ **Image/Video Generation**: Mocks complete, integration pending

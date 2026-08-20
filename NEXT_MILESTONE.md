@@ -1,12 +1,25 @@
 # NEXT MILESTONE
 
-**Last Updated**: Movie-grounded Creative Director **real-Qwen run EXECUTED on a
-Colab T4 — VERDICT: FAIL**. All 18 generated concepts were rejected
-(`LOW 0/3 matched`); the generator **hallucinated a different film** (father/son
-family drama — waiting room, broken clock, dinner table, photograph, kitchen —
-none grounded in the facts), while the rejection gate behaved correctly.
-Fix required on the demonstrated problem: anchor generation to the verbatim
-grounded vocabulary (see below).
+**Last Updated**: Pre-Colab dry-run of the validation harness is **PROVEN
+locally** (`scripts/run_director_validation.py --mock` + 7 scenarios in
+`src/director/mock_validation.py` + 12 regression tests in
+`tests/test_director_validation_dryrun.py`) — cases A–F plus bounded
+regeneration, strict plan-gate rejection, artifact writing, and the exact verdict
+path. Latest grounding commit: `646d4b3` (harness dry-run) on top of `e3ad4b6`
+(`_is_location_confident`: hedged/alternative location labels never ground
+claims), `2c10db9` (thesis claim must ground itself), `bafb4d3` (significant-token
+matching). Full local suite: **342 passed, 3 skipped (16 deselected)**.
+**Real Qwen T4 validation: PENDING** — next action is the real run via
+`scripts/run_director_validation.py --project
+data/bc6384be-47a5-4ee8-8674-7ff861472026`.
+
+Historical baseline (kept): the earlier real-Qwen run on the Colab T4 was
+**VERDICT: FAIL** — all 18 generated concepts were rejected (`LOW 0/3 matched`);
+the generator **hallucinated a different film** (father/son family drama — waiting
+room, broken clock, dinner table, photograph, kitchen — none grounded in the
+facts), while the rejection gate behaved correctly. Fix required on the
+demonstrated problem: anchor generation to the verbatim grounded vocabulary (see
+below).
 
 What this milestone does (see `PROJECT_STATUS.md` for details): the Director now
 reads the existing Movie Intelligence (`movie_index.json` → `SceneFacts`), builds
@@ -21,7 +34,9 @@ inspectable `reports/director_reasoning.md`.
 retrieval model, TTS replacement, subtitle redesign, generative video/image,
 YouTube automation, and **script wiring** — the pipeline stops at the selected
 concept + director plan so the Director can be validated on its own.
-**272 fast tests pass** (23 new grounded-director tests).
+**272+ fast tests pass** (23 new grounded-director tests) — now **342 passed,
+3 skipped, 16 deselected** after the evidence-contract and harness-dry-run
+suites.
 
 **Real-Qwen run (Colab T4, executed)**: `Qwen/Qwen3-4B-Instruct-2507` (4bit,
 cuda), model load 49.03s, 3 LLM calls, 12 substitutes, wall clock 427.05s.
@@ -152,12 +167,15 @@ retrieval human-verdict record is tracked in `reports/`.
     retrieval yet.
   - Editorial narration is deterministic around the real (Qwen) thesis — not yet an LLM editorial writer.
   - Real TTS (Kokoro priority) — quality/performance needs a real-GPU eval.
-  - **Movie-grounded Creative Director — real-Qwen clip validation pending**: the
-    director + evidence pipeline + reasoning report are built and unit-tested
-    (mock LLM), but the real-Qwen run on the validated movie
+  - **Movie-grounded Creative Director — real-Qwen clip validation PENDING**:
+    the director + evidence pipeline + reasoning report are built and unit-tested
+    (mock LLM), and the validation harness dry-run is **PROVEN locally**
+    (cases A–F, bounded regeneration, plan gate, artifacts, verdict path; 12
+    regression tests). The real-Qwen run on the validated movie
     (`bc6384be-...`, via `scripts/run_director_validation.py` → Cell 7d) is
-    gated and has NOT yet been executed/measured on a GPU. Until then, whether
-    real concepts are specific, non-generic, and grounded is unproven.
+    gated and has **NOT yet been executed/measured on a GPU** — status PENDING.
+    Until then, whether real concepts are specific, non-generic, and grounded is
+    unproven.
 
 - **FAILED (baseline to beat)**
   - The first real-movie output (pre-editorial) was: clips in sequence + robotic TTS + paragraph subtitles.
@@ -210,7 +228,7 @@ retrieval human-verdict record is tracked in `reports/`.
      characters, or objects. Keep the strict evidence gate. Recalibrate
      matching only for genuinely-present evidence (single-noun checks; never
      admit ungrounded claims). Add focused unit tests.
-     **DONE (this pass, local suite 319 passing / 3 skipped / 11 deselected):**
+     **DONE (this pass, local suite 342 passing / 3 skipped / 16 deselected):**
      - **Dynamic worked-grounding example** (`DirectorContextBuilder._grounded_example`,
        `src/director/context_builder.py`): the embedded `## WORKED EXAMPLE` is
        now built from the movie's RICHEST citable scene (most objects/actions +
@@ -250,7 +268,19 @@ retrieval human-verdict record is tracked in `reports/`.
        compound action not a verbatim identifier; all derived refs match +
        gate passes; scene ref synthesized). 66→66 local evidence/director
        tests, and full suite 314→319.
-     - Strict concept + plan gates unchanged (never relaxed).
+      - Strict concept + plan gates unchanged (never relaxed).
+     - **Significant-token matching** (`bafb4d3`): `EvidenceAnalyzer` matches
+       vocabulary against significant tokens so stopwords cannot fabricate refs.
+     - **Thesis claim grounding** (`2c10db9`): the thesis claim itself must
+       ground; dialogue/hedged-location bridging cannot fabricate support.
+     - **Hedged/alternative locations never ground** (`e3ad4b6`):
+       `EvidenceAnalyzer._is_location_confident` rejects labels like "indoor,
+       inside a vehicle (likely a bus or train)" / "small shop or garage" — the
+       "Broken Clock" / train-platform class of hallucination cannot derive refs.
+     - **Validation-harness dry-run PROVEN** (`646d4b3`):
+       `scripts/run_director_validation.py --mock` runs the exact harness
+       end-to-end with deterministic scenarios (cases A–F + plan gate + bounded
+       regeneration + artifacts + verdict path), guarded by 12 regression tests.
 
     **Second real-Qwen T4 run EXECUTED after the first two prompts-only fixes
     (worked example + structured feedback): STILL FAIL — 0/12 grounded**
@@ -272,6 +302,8 @@ retrieval human-verdict record is tracked in `reports/`.
      concepts survive with coverage ≥ MED? Are they specific, non-generic,
      grounded in real scenes, different from each other? Update
      `reports/director_validation.md` / `.json` human-eval fields.
+     **Status: harness dry-run PROVEN locally (cases A–F, deterministic verdict,
+     artifacts, 342-test suite green); real T4 execution PENDING.**
   3. **Do NOT wire the script stage yet** (§11). Once the director is validated
      as genuinely specific + grounded, the *next* milestone connects the selected
      concept + evidence strategy to narrative/editorial generation.
