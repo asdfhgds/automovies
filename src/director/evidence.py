@@ -260,6 +260,25 @@ class EvidenceAnalyzer:
         ]
 
     @staticmethod
+    def _is_location_confident(value: str) -> bool:
+        """A location label is reliable grounding ONLY if it states a confident,
+        single reading. Labels with hedges ("indoor, inside a vehicle (likely a
+        bus or train)") or alternatives ("small shop or garage, setting appears
+        to be a workshop") are vision-model guesses — a thesis must NOT anchor a
+        claim on one of their offered words (``shop``, ``train``).
+
+        ``_strip_hedged_location_clause`` trims the hedged tail; if trimming it
+        changes the label at all, the label was hedged and is unusable for claim
+        grounding. ``" or "`` alternatives also disqualify the label.
+        """
+        text = str(value or "").strip()
+        if not text:
+            return False
+        if " or " in text.lower():
+            return False
+        return EvidenceAnalyzer._strip_hedged_location_clause(text) == text
+
+    @staticmethod
     def _strip_hedged_location_clause(value: str) -> str:
         """Cut an uncertain location label down to its confirmed core.
 
@@ -872,8 +891,13 @@ class EvidenceAnalyzer:
                     if overlap < _dialog_overlap_need(len(tokens)):
                         continue
                 elif kind == "location":
-                    tokens = significant_tokens(
-                        self._strip_hedged_location_clause(str(value)))
+                    # Only confident, single-reading location labels can ground
+                    # a claim. A hedged/alternative label ("in a vehicle (likely
+                    # a bus or train)", "small shop or garage") is a vision-model
+                    # guess the thesis must not borrow a word from.
+                    if not self._is_location_confident(str(value)):
+                        continue
+                    tokens = significant_tokens(str(value))
                 else:
                     tokens = significant_tokens(str(value))
                 if not tokens:

@@ -544,6 +544,44 @@ class TestClaimMustGround:
         assert not any("train" in str(v) for v in values)
         assert run_analyzer.is_claim_sufficient(concept, min_coverage=0.4) is False
 
+    def test_hedged_or_alternative_location_never_grounds_claim(
+            self, run_analyzer):
+        # scene-2's location "indoor, inside a vehicle (likely a bus or train)"
+        # is a HEDGED label (uncertain guess + "or" alternative). A thesis
+        # naming ONLY a hedged location's word must derive no LOCATION ref from
+        # it, and — when the word is absent from all real content (no "train" /
+        # "trolley" object exists) — the claim cannot be grounded at all.
+        for word in ("train", "trolley"):
+            concept = {
+                "title": "Vehicle",
+                "hook": "h",
+                "thesis": f"the {word} becomes the film's image of movement",
+                "why_interesting": "w",
+                "visual_opportunity": f"wide shot of the {word}",
+            }
+            refs = run_analyzer.derive_refs(concept, fields=("title", "thesis"))
+            locs = [r for r in refs if r["kind"] == "location"]
+            assert locs == [], f"{word} must not ground on a hedged location"
+            assert run_analyzer.is_claim_sufficient(
+                concept, min_coverage=0.4) is False
+
+    def test_confident_location_still_grounds_claim(self, run_analyzer):
+        # The tightening must not reject fully confirmed locations: scene-1's
+        # plain "indoor, convenience store" is a confident label.
+        concept = {
+            "title": "The Convenience Store",
+            "hook": "h",
+            "thesis": "the convenience store becomes the film's image of commerce",
+            "why_interesting": "w",
+            "visual_opportunity": "the store shelves with various items",
+        }
+        refs = run_analyzer.derive_refs(concept, fields=("title", "thesis"))
+        locs = [r for r in refs if r["kind"] == "location"]
+        assert any("convenience store" in str(r.get("value", ""))
+                   for r in locs)
+        assert run_analyzer.is_claim_sufficient(
+            concept, min_coverage=0.4) is True
+
     def test_grounded_thesis_still_passes_claim_gate(self, run_analyzer):
         # The tightening must not reject genuinely grounded concepts: a thesis
         # whose claim floats directly on real on-screen objects.
@@ -571,6 +609,21 @@ class TestHedgedLocationStrip:
         assert EvidenceAnalyzer._strip_hedged_location_clause(
             "outdoor, riverbank, natural setting") == (
             "outdoor, riverbank, natural setting")
+
+    def test_is_location_confident(self):
+        # Soft hedge words disqualify the label from claim grounding.
+        assert EvidenceAnalyzer._is_location_confident(
+            "outdoor, riverbank, natural setting") is True
+        assert EvidenceAnalyzer._is_location_confident(
+            "indoor, convenience store") is True
+        assert EvidenceAnalyzer._is_location_confident(
+            "indoor, inside a vehicle (likely a bus or train)") is False
+        assert EvidenceAnalyzer._is_location_confident(
+            "indoor, small room, possibly a diner or a bar") is False
+        # Hard alternatives disqualify too, even without a soft hedge word.
+        assert EvidenceAnalyzer._is_location_confident(
+            "indoor, small shop or garage, setting appears to be a workshop "
+            "or storage area") is False
 
 
 # --------------------------------------------------------------------------- #
