@@ -442,6 +442,137 @@ class TestDeriveRefsResistsStopwordLeak:
         assert analyzer.is_sufficient_refs(ev, min_coverage=0.4) is False
 
 
+class TestClaimMustGround:
+    """Regression: the real-Qwen T4 run produced theses about objects the movie
+    does NOT contain (a clock, a train platform, a drawing), each grounding
+    only via an incidental shared word. Two independent leaks were found and
+    fixed:
+
+    1. stopwords — fixed by significant-token matching (previous class);
+    2. a single shared CONTENT token — a "sense of time" thesis matched the
+       dialogue line "What time do you go to bed?"; a "train platform" thesis
+       matched the hedged location label "indoor, inside a vehicle (likely a
+       bus or train)".
+
+    The gate must require the THESIS (title + thesis, the claim substance) to
+    ground on its own — decorative hook/visual prose cannot rescue it.
+    """
+
+    @pytest.fixture
+    def run_movie_index(self):
+        """Faithful miniature of the T4 failing run's movie: real dialogue with
+        "time", real objects a clock-thesis might borrow (mirror, face), and a
+        hedged vehicle location."""
+        return {
+            "movie": {"title": "Real Movie", "duration_sec": 180.0},
+            "scenes": [
+                _scene(
+                    "scene-1", 0.0, 30.0,
+                    location="indoor, convenience store",
+                    objects=["man in plaid shirt", "woman in denim jacket"],
+                    dialogue=[{"speaker": "A",
+                               "text": "What time do you go to bed?"}],
+                ),
+                _scene(
+                    "scene-2", 30.0, 60.0,
+                    location="indoor, inside a vehicle (likely a bus or train)",
+                    objects=["window showing a snowy landscape",
+                             "bus interior with hanging items"],
+                ),
+                _scene(
+                    "scene-3", 60.0, 90.0,
+                    location="indoor, bathroom, personal space",
+                    objects=["mirror", "woman's face"],
+                ),
+            ],
+        }
+
+    @pytest.fixture
+    def run_analyzer(self, run_movie_index):
+        return EvidenceAnalyzer(SceneFacts.from_movie_intelligence(
+            movie_index=run_movie_index))
+
+    def test_time_thesis_does_not_ground_on_dialogue(self, run_analyzer):
+        # The T4 "Broken Clock" thesis: no clock anywhere, but "time" appears
+        # in a real dialogue line. A single shared content word must not bridge
+        # thesis -> dialogue. Dialogue needs a STRONG overlap (>= half the
+        # line, min 2 tokens), so "time" alone derives nothing.
+        concept = {
+            "title": "The Broken Clock",
+            "hook": "why does time break things?",
+            "thesis": "the cracked clock betrays a failing sense of time",
+            "why_interesting": "w",
+            "visual_opportunity": "extreme close-up of the hands turning",
+        }
+        refs = run_analyzer.derive_refs(concept)
+        values = {r.get("value", "") for r in refs}
+        assert not any("time" in str(v) for v in values)
+        # The thesis (claim substance) alone cannot ground -> reject.
+        assert run_analyzer.is_claim_sufficient(concept, min_coverage=0.4) is False
+
+    def test_visual_prose_cannot_rescue_unclaimed_object(self, run_analyzer):
+        # Even if the visual_opportunity mentions the mirror (a REAL object),
+        # the THESIS is about a clock that does not exist. The claim-grounded
+        # gate must reject it: decorative fields are not the claim.
+        concept = {
+            "title": "The Broken Clock",
+            "hook": "h",
+            "thesis": "the cracked clock betrays a failing sense of time",
+            "why_interesting": "w",
+            "visual_opportunity": "the mirror catches the woman's face",
+        }
+        full_refs = run_analyzer.derive_refs(concept)
+        full_values = {r.get("value", "") for r in full_refs}
+        # The full-prose derivation legitimately finds the real mirror/face...
+        assert "mirror" in full_values
+        # ...but the milestone gate requires the CLAIM to ground, and it does not.
+        assert run_analyzer.is_claim_sufficient(concept, min_coverage=0.4) is False
+
+    def test_train_platform_thesis_ignores_hedged_location(self, run_analyzer):
+        # "indoor, inside a vehicle (likely a bus or train)" contains "train",
+        # but it is a hedged GUESS, not confirmed content. A thesis about a
+        # train platform must not ground on it.
+        concept = {
+            "title": "The Train Platform",
+            "hook": "escape",
+            "thesis": "the train platform becomes a symbol of escape",
+            "why_interesting": "w",
+            "visual_opportunity": "wide shot of the platform",
+        }
+        refs = run_analyzer.derive_refs(concept)
+        values = {r.get("value", "") for r in refs}
+        assert not any("train" in str(v) for v in values)
+        assert run_analyzer.is_claim_sufficient(concept, min_coverage=0.4) is False
+
+    def test_grounded_thesis_still_passes_claim_gate(self, run_analyzer):
+        # The tightening must not reject genuinely grounded concepts: a thesis
+        # whose claim floats directly on real on-screen objects.
+        concept = {
+            "title": "The Mirror",
+            "hook": "h",
+            "thesis": "the mirror and the woman's face frame a private ritual",
+            "why_interesting": "w",
+            "visual_opportunity": "the woman's face in the mirror",
+        }
+        refs = run_analyzer.derive_refs(concept)
+        values = {r.get("value", "") for r in refs}
+        assert "mirror" in values
+        assert "woman's face" in values
+        assert run_analyzer.is_claim_sufficient(concept, min_coverage=0.4) is True
+
+
+class TestHedgedLocationStrip:
+    def test_strip_hedged_location_clause(self):
+        assert EvidenceAnalyzer._strip_hedged_location_clause(
+            "indoor, inside a vehicle (likely a bus or train)") == (
+            "indoor, inside a vehicle")
+        assert EvidenceAnalyzer._strip_hedged_location_clause(
+            "indoor, small room, possibly a diner or a bar") == ("indoor, small room")
+        assert EvidenceAnalyzer._strip_hedged_location_clause(
+            "outdoor, riverbank, natural setting") == (
+            "outdoor, riverbank, natural setting")
+
+
 # --------------------------------------------------------------------------- #
 # 5. Bounded regeneration: initial batch + single retry, then FAIL
 # --------------------------------------------------------------------------- #

@@ -240,9 +240,17 @@ class MovieGroundedDirector:
                 c["_derived_refs"] = derived
                 ev = analyzer.concept_evidence(
                     {"thesis": c.get("thesis", ""), "evidence_refs": derived})
+                # STRICT CONCEPT GATE: a concept passes only if (a) its thesis
+                # is not a generic platitude, (b) its derived claim refs
+                # resolve at coverage, AND (c) its CENTRAL CLAIM (the thesis
+                # alone — not decorative hook/visual prose) is itself grounded.
+                # (c) is what stops a thesis about an absent object (clock,
+                # train platform) from slipping through on one shared word.
                 if (is_generic_thesis(c.get("thesis", ""))
                         or not analyzer.is_sufficient_refs(
-                            ev, min_coverage=min_coverage)):
+                            ev, min_coverage=min_coverage)
+                        or not analyzer.is_claim_sufficient(
+                            c, min_coverage=min_coverage)):
                     batch_rejected.append(c)
                 else:
                     c["_derived_ev"] = ev

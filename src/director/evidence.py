@@ -24,7 +24,7 @@ Matching contract (deterministic, no LLM):
   never used as a primary rule (so ``son`` never matches ``person``).
 """
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Iterable
 
 from director.concepts import concept_refs, render_ref
 from director.scene_facts import (
@@ -106,6 +106,26 @@ SYNONYM_ALIASES: Dict[str, List[str]] = {}
 
 def _scene_id_norm(value: str) -> str:
     return re.sub(r"[\s\-_]+", "", (value or "").lower().strip())
+
+
+#: Lead-branches that mark a location label as an uncertain *guess* rather than
+#: confirmed on-screen content: "indoor, inside a vehicle (likely a bus or
+#: train)", "indoor, small room, possibly a diner or a bar". Such hedged tokens
+#: must NEVER ground a concept's central claim (a ``train`` thesis must not
+#: pass because a vision label says "likely a bus or train").
+_LOCATION_HEDGE_LEADS = (
+    "likely ", "possibly ", "probably ", "maybe ", "perhaps ",
+    "appears", "seems", "could be", "might be", "type of", "setting:",
+    "appears to be", "could possibly",
+)
+
+
+def _dialog_overlap_need(num_tokens: int) -> int:
+    """Dialogue refs require a STRONG overlap with the concept prose — minimal
+    quoting (>= half the line, at least 2 tokens), never a single shared word.
+    A thesis about a "sense of time" must not ground on the line "What time do
+    you go to bed?" merely because both mention "time"."""
+    return max(2, (num_tokens + 1) // 2)
 
 
 class EvidenceAnalyzer:
@@ -238,6 +258,29 @@ class EvidenceAnalyzer:
             sid for sid in self.facts.used_scene_ids()
             if all(t in self._scene_tokens[sid] for t in tokens)
         ]
+
+    @staticmethod
+    def _strip_hedged_location_clause(value: str) -> str:
+        """Cut an uncertain location label down to its confirmed core.
+
+        A vision-synthesized location often carries hedge branches ("indoor,
+        inside a vehicle (likely a bus or train)", "indoor, small room,
+        possibly a diner or a bar"). The hedged tail is a *guess* — trimming it
+        ensures derived refs for the scene only expose the confident part (so
+        "train"/"diner" never become groundable vocabulary from those labels).
+        """
+        text = str(value or "").strip()
+        low = text.lower()
+        # Cut at hedges that appear either bare ("possibly a diner") or inside
+        # a parenthetical ("(likely a bus or train)").
+        cuts = [low.find("(")]
+        for hedge in _LOCATION_HEDGE_LEADS:
+            cuts.append(low.find("(" + hedge.lstrip()))
+            cuts.append(low.find(hedge))
+        active = [i for i in cuts if i >= 0]
+        if active:
+            return text[: min(active)].rstrip(" ,:;(-").strip()
+        return text
 
     def _match_ref(self, ref: Dict[str, Any]) -> List[str]:
         """Resolve one evidence ref to the scene ids that support it."""
@@ -729,6 +772,7 @@ class EvidenceAnalyzer:
         concept: Dict[str, Any],
         max_refs: int = 6,
         prefer_concrete: bool = True,
+        fields: Optional[Iterable[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Synthesize ``evidence_refs`` deterministically from the concept's own
         prose (title / hook / thesis / why_interesting / visual_opportunity) —
@@ -745,13 +789,20 @@ class EvidenceAnalyzer:
         If the prose does not name a scene id but matched some concrete
         vocabulary, a scene ref for the strongest supporting scene is appended
         so the concept always has an anchor for the plan.
+
+        ``fields`` restricts which concept prose fields are scanned
+        (default: all). The milestone gate derives refs from the THESIS alone
+        (the central claim) so that a thesis about an absent object cannot be
+        rescued by decorative prose in ``visual_opportunity`` / ``hook``.
         """
         if not concept:
             return []
+        if fields is None:
+            fields = ("title", "hook", "thesis", "why_interesting",
+                      "visual_opportunity")
         prose_raw = " ".join(
             str(concept.get(k) or "")
-            for k in ("title", "hook", "thesis", "why_interesting",
-                      "visual_opportunity")
+            for k in fields
         )
         prose_lower = prose_raw.lower()
         prose = _tokenize(prose_lower)
@@ -810,7 +861,21 @@ class EvidenceAnalyzer:
             for value in values:
                 if len(refs) >= max_refs:
                     break
-                tokens = significant_tokens(str(value))
+                if kind == "dialogue":
+                    # Dialogue is only grounded when the concept SUBSTANTIALLY
+                    # reproduces the line — a single shared word ("time") is
+                    # too weak a bridge between a thesis and a scene's speech.
+                    tokens = significant_tokens(str(value))
+                    if not tokens or len(tokens) < 2:
+                        continue
+                    overlap = sum(1 for t in tokens if t in prose_sig_set)
+                    if overlap < _dialog_overlap_need(len(tokens)):
+                        continue
+                elif kind == "location":
+                    tokens = significant_tokens(
+                        self._strip_hedged_location_clause(str(value)))
+                else:
+                    tokens = significant_tokens(str(value))
                 if not tokens:
                     continue
                 # Match on ANY significant (content) token so prose that says
@@ -859,3 +924,28 @@ class EvidenceAnalyzer:
         if require_concrete and ev["concrete_matched"] < 1:
             return False
         return True
+
+    def is_claim_sufficient(
+        self,
+        concept: Dict[str, Any],
+        min_coverage: float = 0.4,
+    ) -> bool:
+        """A concept's CENTRAL CLAIM must itself ground — decorative prose
+        fields cannot rescue a thesis about content that is absent.
+
+        The stopword fix stopped ALL concepts sharing the same generic refs,
+        but a concept could still pass because a shared incidental word in its
+        ``visual_opportunity`` / ``hook`` anchored a real token. The T4 run
+        produced theses about absent objects (a clock, a drawing) that grounded
+        ONLY via such incidental matches. This gate derives refs from the
+        thesis alone (title + thesis, the claim substance) and requires that
+        derivation to be sufficient on its own.
+        """
+        claim = self.derive_refs(
+            concept, fields=("title", "thesis"),
+        )
+        ev = self.concept_evidence({
+            "thesis": concept.get("thesis", ""),
+            "evidence_refs": claim,
+        })
+        return self.is_sufficient_refs(ev, min_coverage=min_coverage)
