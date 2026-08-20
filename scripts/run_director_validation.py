@@ -105,6 +105,30 @@ def _timed_sec(started: float) -> float:
     return round(__import__("time").monotonic() - started, 2)
 
 
+def _verdict(result: Dict[str, Any]) -> Dict[str, str]:
+    """Deterministic verdict derived ONLY from the pipeline state.
+
+    The validator must never report PASS when grounding is insufficient.
+    - PASS: a concept was selected AND its plan was grounded and emitted.
+    - PLAN_REJECTED: a concept was selected but the strict plan gate refused to
+      emit a plan (plan_rejection recorded).
+    - FAIL: no concept was successfully grounded -> nothing selected / no plan.
+    """
+    selected = result.get("selected_concept")
+    plan = result.get("plan")
+    plan_rejection = result.get("plan_rejection")
+    if selected is None:
+        return {"verdict": "FAIL", "reason": "no concept passed the evidence gate"}
+    if plan is not None and plan_rejection is None:
+        return {"verdict": "PASS", "reason": "concept grounded and plan emitted"}
+    if plan_rejection is not None:
+        return {"verdict": "PLAN_REJECTED",
+                "reason": "concept grounded but the strict plan gate rejected "
+                          "the plan (grounding insufficient)"}
+    return {"verdict": "FAIL",
+            "reason": "unexpected: concept selected with no plan and no rejection"}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", required=True,
@@ -112,6 +136,18 @@ def main() -> None:
     parser.add_argument("--num-concepts", type=int, default=NUM_CONCEPTS)
     parser.add_argument("--min-coverage", type=float, default=MIN_COVERAGE)
     parser.add_argument("--duration-sec", type=int, default=DURATION_SEC)
+    parser.add_argument("--mock", action="store_true",
+                        help="local dry-run: use a deterministic mock LLM "
+                             "(no GPU / no Qwen download) instead of real Qwen")
+    parser.add_argument("--mock-scenario", default="grounded",
+                        choices=["grounded", "hallucinated", "invalid",
+                                 "hedged", "partial", "none",
+                                 "plan_rejected"],
+                        help="mock scenario (only with --mock)")
+    parser.add_argument("--no-mock-plan-grounded", action="store_true",
+                        help="mock: force the plan editorial_direction to "
+                             "invent unsupported content so the strict plan "
+                             "gate rejects it (plan_rejection recorded)")
     args = parser.parse_args()
 
     project_dir = Path(args.project)
@@ -126,8 +162,18 @@ def main() -> None:
         print(f"No scenes loaded from {project_dir}", file=sys.stderr)
         sys.exit(2)
 
-    provider = build_qwen_provider()
-    director = MovieGroundedDirector(llm=provider.generate_text)
+    if args.mock:
+        from director.mock_validation import MockValidationLLM
+        provider = MockValidationLLM(
+            movie_index=idx,
+            scenario=args.mock_scenario,
+            num_concepts=args.num_concepts,
+            plan_direction_stays_grounded=not args.no_mock_plan_grounded,
+        )
+    else:
+        provider = build_qwen_provider()
+    llm = provider.generate_text if not args.mock else provider
+    director = MovieGroundedDirector(llm=llm)
     _run_started = __import__("time").monotonic()
     result = director.develop(
         movie_metadata=metadata,
@@ -155,6 +201,7 @@ def main() -> None:
         "wall_clock_sec": wall_clock_sec,
     }
 
+    verdict_result = _verdict(result)
     # Machine-readable output.
     out_json = {
         "project_id": idx.get("project_id"),
@@ -175,6 +222,9 @@ def main() -> None:
         "plan": result["plan"],
         "plan_rejection": result.get("plan_rejection"),
         "diversity_metric": result["diversity_metric"],
+        "verdict": verdict_result["verdict"],
+        "verdict_reason": verdict_result["reason"],
+        "source_provider": "mock" if args.mock else "qwen",
     }
     report_dir = project_dir / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -201,6 +251,7 @@ def main() -> None:
           f"rejected={len(result['rejected_concepts'])} "
           f"selected={result['selected_concept']['title'] if result['selected_concept'] else 'NONE'}"
           f" diversity={result['diversity_metric']:.3f}")
+    print(f"verdict={verdict_result['verdict']} ({verdict_result['reason']})")
     print("runtime: "
           f"gpu={gpu.get('name') or gpu.get('reason') or 'not measured'} "
           f"model_load={runtime['model_load_time_sec']}s "
