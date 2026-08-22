@@ -1,19 +1,21 @@
 # NEXT MILESTONE
 
-**Last Updated**: Pre-Colab dry-run of the validation harness is **PROVEN
-locally** (`scripts/run_director_validation.py --mock` + 7 scenarios in
-`src/director/mock_validation.py` + 12 regression tests in
-`tests/test_director_validation_dryrun.py`) — cases A–F plus bounded
-regeneration, strict plan-gate rejection, artifact writing, and the exact verdict
-path. Latest grounding commit: `646d4b3` (harness dry-run) on top of `e3ad4b6`
-(`_is_location_confident`: hedged/alternative location labels never ground
-claims), `2c10db9` (thesis claim must ground itself), `bafb4d3` (significant-token
-matching). Full local suite: **342 passed, 3 skipped (16 deselected)**.
-**Real Qwen T4 validation: PENDING** — next action is the real run via
-`scripts/run_director_validation.py --project
-data/bc6384be-47a5-4ee8-8674-7ff861472026`.
+**Last Updated**: Real-Qwen T4 validation **EXECUTED (Run 2) — VERDICT
+PLAN_REJECTED**. Big improvement over Run 1 (0/18): **6 grounded concepts
+(coverage HIGH), 3 hallucinated rejected, selected concept grounded, diversity
+0.929**, `Qwen/Qwen3-4B-Instruct-2507` (4bit/cuda, 4 LLM calls, 1 regen round, 3
+substitutes, wall clock 451.83s). But the **strict PLAN gate rejected the
+selected concept's plan (coverage 26% < 55%) → no plan emitted → milestone NOT
+complete**. Demonstrations this run: (a) the plan model writes generic film prose
+instead of evidence-scene vocabulary; (b) *thesis-noun leak* — the selected
+concept's thesis rests on an invented "12:00 clock" (0 occurrences in the
+facts), admitted by real peripheral refs. Prior: pre-Colab harness dry-run
+**PROVEN** (`--mock`, 7 scenarios, 12 regression tests, commit `646d4b3`), full
+local suite **342 passed / 3 skipped / 16 deselected**. Next: fix the PLAN
+prompt (evidence-vocabulary anchoring) and close the thesis-noun leak, then
+re-run on the T4.
 
-Historical baseline (kept): the earlier real-Qwen run on the Colab T4 was
+Historical baseline (Run 1, kept): the earlier real-Qwen run on the Colab T4 was
 **VERDICT: FAIL** — all 18 generated concepts were rejected (`LOW 0/3 matched`);
 the generator **hallucinated a different film** (father/son family drama — waiting
 room, broken clock, dinner table, photograph, kitchen — none grounded in the
@@ -167,15 +169,18 @@ retrieval human-verdict record is tracked in `reports/`.
     retrieval yet.
   - Editorial narration is deterministic around the real (Qwen) thesis — not yet an LLM editorial writer.
   - Real TTS (Kokoro priority) — quality/performance needs a real-GPU eval.
-  - **Movie-grounded Creative Director — real-Qwen clip validation PENDING**:
-    the director + evidence pipeline + reasoning report are built and unit-tested
-    (mock LLM), and the validation harness dry-run is **PROVEN locally**
-    (cases A–F, bounded regeneration, plan gate, artifacts, verdict path; 12
-    regression tests). The real-Qwen run on the validated movie
-    (`bc6384be-...`, via `scripts/run_director_validation.py` → Cell 7d) is
-    gated and has **NOT yet been executed/measured on a GPU** — status PENDING.
-    Until then, whether real concepts are specific, non-generic, and grounded is
-    unproven.
+  - **Movie-grounded Creative Director — real-Qwen clip validation RUN 2
+    EXECUTED, milestone NOT complete (verdict PLAN_REJECTED)**:
+    the director + evidence pipeline is unit-tested and the validation harness
+    dry-run is **PROVEN locally** (cases A–F, bounded regeneration, plan gate,
+    artifacts, verdict path; 12 regression tests). The real-Qwen run on the
+    validated movie (`bc6384be-...`, via `scripts/run_director_validation.py` →
+    Cell 7d) was executed on a Colab T4: **6 concepts grounded (HIGH coverage),
+    diversity 0.929**, but the strict plan gate rejected the plan (coverage 26%
+    < 55%) so nothing was emitted. Concepts are now specific, non-generic, and
+    grounded — but the plan stage still fails under real Qwen, and a
+    *thesis-noun leak* lets invented star objects (clock/revolver/father) pass
+    via real peripheral refs.
 
 - **FAILED (baseline to beat)**
   - The first real-movie output (pre-editorial) was: clips in sequence + robotic TTS + paragraph subtitles.
@@ -211,14 +216,16 @@ retrieval human-verdict record is tracked in `reports/`.
     a concept whose claims don't literally appear is rejected (this is a feature,
     but it means semantically-paraphrased-but-true evidence can be under-counted).
 
-- **CURRENT BOTTLENECK**: **the generator hallucinates a different film.** The
-  real-Qwen run (Colab T4) produced 0/18 grounded concepts — all 18 were
-  correctly rejected because they were almost entirely invented (family-drama
-  scenes absent from the facts) and formulaic. The rejection gate is proven;
-  the unproven/weak link is the generation prompt+context: real Qwen does not
-  reuse the provided known-objects/locations vocabulary. Secondary kept:
-  matcher brittleness for partly-real evidence (loosening alone would admit
-  hallucinations, so it is NOT a standalone fix).
+- **CURRENT BOTTLENECK (Run 2, real T4)**: **the strict PLAN gate rejects the
+  plan.** The concept stage is now validated end-to-end (Run 2: 6/6 grounded,
+  HIGH coverage, diversity 0.929; the run-1 hallucinate-a-different-film failure
+  mode is gone). The remaining blocker is the plan stage: the 4B model writes
+  `editorial_direction` in generic cinema prose (23 invented terms + 3
+  elsewhere-terms; coverage 26% < 55%) instead of reusing the evidence scene's
+  vocabulary + `PLAN_EDITORIAL_TERMS`, so the strict plan gate refuses it and no
+  plan is emitted. Secondary (demonstrated): **thesis-noun leak** — real
+  peripheral refs admit a thesis whose star object is invented ("12:00 clock",
+  revolver, kitchen, father — 0 occurrences in the facts).
 
 - **NEXT ACTION** (fix the demonstrated generator grounding problem, re-validate, then wire to script)
   1. **Fix the generator (demonstrated problem, director scope only)**: strengthen
@@ -302,8 +309,17 @@ retrieval human-verdict record is tracked in `reports/`.
      concepts survive with coverage ≥ MED? Are they specific, non-generic,
      grounded in real scenes, different from each other? Update
      `reports/director_validation.md` / `.json` human-eval fields.
-     **Status: harness dry-run PROVEN locally (cases A–F, deterministic verdict,
-     artifacts, 342-test suite green); real T4 execution PENDING.**
+     **Status: RUN 2 EXECUTED (Colab T4) — VERDICT PLAN_REJECTED.**
+     Concepts: PASS (6 grounded, HIGH coverage, diversity 0.929; human-eval
+     recorded in `reports/director_validation.md`/`.json`). Plan: FAIL —
+     strict plan gate rejected `editorial_direction` (coverage 26% < 55%, 23
+     invented terms + 3 elsewhere). New fixes demonstrated by this run:
+     (a) constrain the **plan prompt** to the evidence scene's verbatim
+     vocabulary + `PLAN_EDITORIAL_TERMS` (mirror of the concept worked-example
+     fix); (b) close the **thesis-noun leak** — don't let real peripheral refs
+     admit a thesis whose star object (clock/12:00, revolver, kitchen, father)
+     is not in the facts (require the thesis's salient noun among resolved
+     refs, or derive refs strictly from prose). Then re-run (Run 3).
   3. **Do NOT wire the script stage yet** (§11). Once the director is validated
      as genuinely specific + grounded, the *next* milestone connects the selected
      concept + evidence strategy to narrative/editorial generation.

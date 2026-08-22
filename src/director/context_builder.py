@@ -72,6 +72,22 @@ def scene_summary(sf, index: int = 0) -> str:
     return "\n".join(lines)
 
 
+def scene_inventory_line(sf) -> str:
+    """One-line compact inventory entry for a scene (PASS 1 — full movie)."""
+    shown = sf.scene_id
+    time = f"{_fmt_ts(sf.start_sec)}–{_fmt_ts(sf.end_sec)}"
+    chars = ", ".join(sf.characters) if sf.characters else "—"
+    loc = sf.location or "—"
+    acts = ", ".join(sf.actions[:3]) if sf.actions else "—"
+    objs = ", ".join(sf.objects[:4]) if sf.objects else "—"
+    visual = sf.visual_description[:60] if sf.visual_description else "—"
+    mood = sf.mood or "—"
+    themes = ", ".join(sf.themes[:3]) if sf.themes else "—"
+    return (f"{shown}: {time} | chars: {chars} | loc: {loc} | "
+            f"acts: {acts} | objs: {objs} | visual: {visual} | "
+            f"mood: {mood} | themes: {themes}")
+
+
 class DirectorContextBuilder:
     """Builds token-limited director context from ``SceneFacts``."""
 
@@ -194,6 +210,17 @@ class DirectorContextBuilder:
             "listed verbatim in the scene cards / WHAT ACTUALLY EXISTS."
         )
 
+    def build_movie_inventory(self, scene_facts: SceneFacts) -> str:
+        """Build a compact one-line inventory of ALL scenes (PASS 1).
+
+        Every scene gets a single line with high-value facts. This gives the
+        director a complete movie overview without token-budget truncation.
+        """
+        lines = ["## FULL MOVIE INVENTORY (ALL SCENES)"]
+        for sf in scene_facts:
+            lines.append(scene_inventory_line(sf))
+        return "\n".join(lines)
+
     def build_concept_generation_context(
         self,
         movie_metadata: Dict[str, Any],
@@ -201,10 +228,17 @@ class DirectorContextBuilder:
         creative_memory: str = "",
         user_topic: Optional[str] = None,
     ) -> Tuple[str, Dict[str, Any]]:
-        """Build the full context for the concept brainstorm."""
+        """Build the full context for the concept brainstorm.
+
+        Two-level context:
+        - PASS 1: Compact inventory of ALL scenes (always included)
+        - PASS 2: Deep scene context for a subset (truncated if needed)
+        """
+        total_scenes = len(scene_facts)
         meta = {
-            "scenes_included": 0,
-            "total_scenes": len(scene_facts),
+            "total_scenes": total_scenes,
+            "inventory_scenes": total_scenes,
+            "detailed_scenes": 0,
             "memory_included": False,
             "example_included": False,
             "truncated": False,
@@ -244,7 +278,12 @@ class DirectorContextBuilder:
         header_part = f"## MOVIE\nTitle: {title}\nDuration: {dur_str}\n\n{grounding}"
         parts.append(header_part)
 
-        # 2. Fact vocabulary (known names — hallucination guard).
+        # 2. PASS 1: Full movie inventory (compact, all scenes).
+        inventory = self.build_movie_inventory(scene_facts)
+        parts.append(inventory)
+        meta["inventory_tokens"] = self._estimate_tokens(inventory)
+
+        # 3. Fact vocabulary (known names — hallucination guard).
         def _unique(values, limit=24):
             seen, out = set(), []
             for v in values:
@@ -269,8 +308,7 @@ class DirectorContextBuilder:
         if self._estimate_tokens(vocab) <= int(self.available * 0.7):
             parts.append(vocab)
 
-        # 3. Worked, fully-grounded example (shows the exact ref style).
-        # Highest priority: reserve its space up front so it always appears.
+        # 4. Worked, fully-grounded example (shows the exact ref style).
         example = self._grounded_example(scene_facts)
         example_part = ""
         if example:
@@ -282,22 +320,21 @@ class DirectorContextBuilder:
                 "not copy this concept.\n\n" + example
             )
 
-        # 4. Scene cards (truncated by token budget) — scenes fit into whatever
-        # remains AFTER the always-reserved parts above.
+        # 5. PASS 2: Deep scene context (truncated by token budget).
         reserved_now = self._estimate_tokens("\n\n".join(parts)) + (
             self._estimate_tokens(example_part) if example_part else 0
         )
         scene_budget = max(0, self.available - reserved_now)
         scene_parts = [scene_summary(sf, i) for i, sf in enumerate(scene_facts)]
-        chosen = self._fit(scene_parts, scene_budget, meta, "scenes_included",
+        chosen = self._fit(scene_parts, scene_budget, meta, "detailed_scenes",
                            "truncated")
         if chosen:
-            parts.append("## ACTUAL SCENES\n" + "\n\n".join(chosen))
+            parts.append("## DETAILED SCENE CONTEXT\n" + "\n\n".join(chosen))
         if example_part:
             parts.append(example_part)
             meta["example_included"] = True
 
-        # 5. Creative memory (avoid repetition) if it fits.
+        # 6. Creative memory (avoid repetition) if it fits.
         if creative_memory and creative_memory.strip():
             mem_tokens = self._estimate_tokens(creative_memory)
             if self._estimate_tokens("\n\n".join(parts)) + mem_tokens <= self.available:
@@ -370,23 +407,22 @@ class DirectorContextBuilder:
             if not objs or not mood:
                 continue
             example_ref_lines.append(
-                f"- Scene {sf.scene_id}: reference \"{objs[0]}\" and the "
-                f"\"{mood}\" mood only."
+                f"- Scene {sf.scene_id}: hold the \"{objs[0]}\" and the "
+                f"\"{mood}\" mood."
             )
             break
         worked_example = ""
         if example_ref_lines:
             worked_example = (
                 "## WORKED EDITORIAL EXAMPLE (ALREADY GROUNDED — imitate the "
-                "restraint, write your own words)\n"
+                "restraint, write your own words, stay inside the whitelist)\n"
                 + "\n".join(example_ref_lines)
                 + "\n"
-                "Pacing: slow and intentional.\n"
-                "Visual style: draw on the listed objects/locations only; if a "
-                "visual is not in the vocabulary above, describe it abstractly "
-                "instead of naming a prop.\n"
-                "Audio style: minimal; no dialogue is referenced unless listed.\n"
-                "Editing style: long takes and quiet cuts.\n"
+                "Pacing: slow and measured.\n"
+                "Visual style: minimal, grounded in the scenes above and "
+                "their stillness.\n"
+                "Audio style: quiet; silence and sparse sound.\n"
+                "Editing style: long takes and steady cuts, soft focus.\n"
             )
 
         return (

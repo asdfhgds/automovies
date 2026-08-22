@@ -1,25 +1,25 @@
 # PROJECT STATUS — Autonomous Movie Studio
 
-**Last Updated**: Pre-Colab dry-run of the validation harness is **PROVEN locally**
-via `scripts/run_director_validation.py --mock` with 7 deterministic scenarios
-(`src/director/mock_validation.py`) and 12 harness regression tests
-(`tests/test_director_validation_dryrun.py`), covering cases A–F (valid grounded,
-hallucinated references, valid-thesis/invalid-evidence, hedged location, partial
-coverage, no valid concepts) plus bounded regeneration, strict plan-gate
-rejection, artifact writing, and the exact verdict path. Latest grounding commit:
-`646d4b3` (harness dry-run + regression tests) on top of the grounding fixes
-`e3ad4b6` (`_is_location_confident` — hedged/alternative location labels never
-ground claims), `2c10db9` (thesis claim must ground itself), and `bafb4d3`
-(significant-token matching so stopwords cannot fabricate refs). Full local suite:
-**342 passed, 3 skipped (16 deselected: slow/llm_integration)**. **Real Qwen T4
-validation: PENDING** — next action is
-`scripts/run_director_validation.py --project
-data/bc6384be-47a5-4ee8-8674-7ff861472026` on a Colab T4 with real Qwen.
+**Last Updated**: **Real-Qwen T4 validation EXECUTED (Run 2) — VERDICT
+PLAN_REJECTED**: dramatic improvement vs Run 1 (0/18 grounded) — **6 concepts
+survived the gate with HIGH coverage, 3 hallucinated concepts rejected, selected
+concept grounded, diversity 0.929**, running `Qwen/Qwen3-4B-Instruct-2507`
+(4bit/cuda, Tesla T4, 4 LLM calls, 1 regen round, 3 substitutes, wall clock
+451.83s). The **strict PLAN gate then correctly rejected the plan** (coverage
+26% < 55%) so **no plan was emitted → milestone NOT complete**. Residual leaks
+demonstrated: (a) the plan model writes generic film prose instead of the
+evidence-scene vocabulary; (b) the selected concept's thesis rests on an
+**invented** "12:00 clock" (0 occurrences in the facts) carried by real
+peripheral refs. Pre-Colab harness dry-run is **PROVEN** (`--mock`, 7 scenarios,
+12 regression tests). Latest grounding commit: `646d4b3`. Full local suite:
+**342 passed, 3 skipped (16 deselected: slow/llm_integration)**. Next: fix the
+plan prompt (evidence-vocabulary anchoring) + close the thesis-noun leak, re-run
+on the T4.
 
-Historical baseline (pre-fixes real-Qwen run, Colab T4): **VERDICT FAIL** — all
-18 generated concepts were rejected (`LOW 0/3`) because the generator
-hallucinated a different film (invented family drama), while the rejection gate
-worked correctly. The Director now reads the existing Movie Intelligence
+Historical baseline (Run 1, pre-fixes): **VERDICT FAIL** — all 18 generated
+concepts were rejected (`LOW 0/3`) because the generator hallucinated a
+different film (invented family drama), while the rejection gate worked
+correctly. The Director now reads the existing Movie Intelligence
 (`movie_index.json` → `SceneFacts`), builds a compact fact-grounded context, asks
 real Qwen for 5 diverse concepts, **rejects** any concept whose
 `required_evidence` is not actually present in the scenes, selects the strongest
@@ -686,6 +686,33 @@ actually present in the movie.
   (`son`/`door` True from garbled tokens). Loosening matching alone would admit
   hallucinations.
 
+### Real-Qwen run result (Colab T4) — RUN 2: VERDICT PLAN_REJECTED (after grounding fixes)
+- Timings (measured): Tesla T4 (peak 4.0 GB), `Qwen/Qwen3-4B-Instruct-2507`
+  (4bit, cuda), load 174.01s, 4 LLM calls, 1 regen round, 3 substitutes,
+  wall clock 451.83s, total generation 277.66s.
+- **Generated 6 / rejected 3 / selected 1 / diversity 0.929** — verses Run 1's
+  generated 0 / rejected 18 / diversity 0.000. All 6 surviving concepts scored
+  `coverage HIGH (6/6)`.
+- **Selected** "The Clock That Never Ticks" — evidence_refs all REAL
+  (scene-1/3/6, "another person partially visible", "woman's face",
+  "looking around") but its thesis's central premise (a **clock stuck at
+  12:00**) is **invented** (`clock`/`12:00` = 0 occurrences in the facts). The
+  model gamed the ref list with real peripheral vocabulary while the star
+  object does not exist — the demonstrated *thesis-noun leak*.
+- Fully-grounded survivors: **D** "The Car That Never Moved" (car/garage/subway
+  car/car interior/burning car all real), **E** "The Bench and the Dusk"
+  (dog/bench/arm/riverbank/rural road real), **F** "Anxiety in the Bathroom"
+  (mirror/snowy window/woman's face/convenience store real). **C** boundary
+  (window real, "father" invented).
+- Rejected 3: all correctly rejected (`LOW` claim coverage; kitchen/revolver/
+  father/son-leaves absent) — the run-1 family-drama hallucination failure mode
+  is now handled by the claim gate.
+- **Plan rejected by the strict plan gate**: `editorial_direction` coverage
+  25.7% (min 55%); 23 invented terms (deliberate, sense, accumulation, weight,
+  emerge, duration, hum, breath, ...) + 3 elsewhere-terms (hands/resting/gaze).
+  The 4B model wrote generic cinema prose instead of evidence-scene vocabulary.
+  **No invalid plan emitted — gate is correct.** Milestone NOT complete.
+
 ### Files added
 - `src/director/scene_facts.py` — normalizer + fact access + hallucination guard.
 - `src/director/context_builder.py` — compact, token-limited director context.
@@ -1011,9 +1038,11 @@ TOTAL: 342 passing, 0 failures
    PASS/PLAN_REJECTED/FAIL are derived from pipeline state only; regression
    tests prove bounded regeneration, plan rejection data, artifact writing, and
    that PASS is never reported when grounding is insufficient.
-⏳ **Real-Qwen clip validation (Colab T4)**: notebook
-   `colab_grounded_director_validation.ipynb` ready; execution on the TG4 with
-   real Qwen is PENDING — the harness dry-run is proven first.
+⏳ **Real-Qwen clip validation (Colab T4)**: executed via notebook
+   `colab_grounded_director_validation.ipynb` — **RUN 2 VERDICT PLAN_REJECTED**:
+   6 concepts grounded (HIGH coverage, diversity 0.929), but the strict plan
+   gate rejected the editorial plan (coverage 26% < 55%), no plan emitted.
+   Re-run pending after the plan-prompt + thesis-noun fixes.
 ⏳ **Real-Movie + Real-TTS GPU run**: notebook `colab_real_movie_tts.ipynb` ready;
    needs a user-supplied legally-owned movie to execute on a T4/A100
 ⏳ **Image/Video Generation**: Mocks complete, integration pending

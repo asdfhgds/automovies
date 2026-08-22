@@ -98,6 +98,40 @@ def analyzer(facts):
     return EvidenceAnalyzer(facts)
 
 
+@pytest.fixture
+def run_movie_index():
+    """Faithful miniature of the T4 failing run's movie: real dialogue with
+    "time", real objects a clock-thesis might borrow (mirror, face), a hedged
+    vehicle location, and — for the Run-2 thesis-noun leak regression — the
+    live "looking around" / "another person partially visible" identifiers a
+    clock thesis could borrow via the shared words "around" / "visible"."""
+    return {
+        "movie": {"title": "Real Movie", "duration_sec": 180.0},
+        "scenes": [
+            _scene(
+                "scene-1", 0.0, 30.0,
+                location="indoor, convenience store",
+                objects=["man in plaid shirt", "woman in denim jacket"],
+                dialogue=[{"speaker": "A",
+                           "text": "What time do you go to bed?"}],
+            ),
+            _scene(
+                "scene-2", 30.0, 60.0,
+                location="indoor, inside a vehicle (likely a bus or train)",
+                objects=["window showing a snowy landscape",
+                         "bus interior with hanging items",
+                         "another person partially visible",
+                         "looking around"],
+            ),
+            _scene(
+                "scene-3", 60.0, 90.0,
+                location="indoor, bathroom, personal space",
+                objects=["mirror", "woman's face"],
+            ),
+        ],
+    }
+
+
 # --------------------------------------------------------------------------- #
 # 1. Exact scene-id grounding (exact-ID first)
 # --------------------------------------------------------------------------- #
@@ -459,35 +493,6 @@ class TestClaimMustGround:
     """
 
     @pytest.fixture
-    def run_movie_index(self):
-        """Faithful miniature of the T4 failing run's movie: real dialogue with
-        "time", real objects a clock-thesis might borrow (mirror, face), and a
-        hedged vehicle location."""
-        return {
-            "movie": {"title": "Real Movie", "duration_sec": 180.0},
-            "scenes": [
-                _scene(
-                    "scene-1", 0.0, 30.0,
-                    location="indoor, convenience store",
-                    objects=["man in plaid shirt", "woman in denim jacket"],
-                    dialogue=[{"speaker": "A",
-                               "text": "What time do you go to bed?"}],
-                ),
-                _scene(
-                    "scene-2", 30.0, 60.0,
-                    location="indoor, inside a vehicle (likely a bus or train)",
-                    objects=["window showing a snowy landscape",
-                             "bus interior with hanging items"],
-                ),
-                _scene(
-                    "scene-3", 60.0, 90.0,
-                    location="indoor, bathroom, personal space",
-                    objects=["mirror", "woman's face"],
-                ),
-            ],
-        }
-
-    @pytest.fixture
     def run_analyzer(self, run_movie_index):
         return EvidenceAnalyzer(SceneFacts.from_movie_intelligence(
             movie_index=run_movie_index))
@@ -597,6 +602,69 @@ class TestClaimMustGround:
         assert "mirror" in values
         assert "woman's face" in values
         assert run_analyzer.is_claim_sufficient(concept, min_coverage=0.4) is True
+
+
+class TestThesisNounLeakClosed:
+    """Regression for the real-Qwen T4 Run 2 leak: the selected "Clock That
+    Never Ticks" thesis passed the claim gate because ``derive_refs`` matched
+    multi-token vocab items on ANY single shared token. A thesis whose prose
+    said "clock face ... is visible ... constructed around" harvested LIVE
+    refs ("woman's face", "another person partially visible", "looking
+    around") purely via the shared generic words "face" / "visible" / "around".
+
+    Multi-token vocabulary items now require at least TWO of their own content
+    tokens to appear in the prose, so a real peripheral noun can no longer be
+    borrowed to admit a thesis whose star object (a clock) exists nowhere.
+    """
+
+    @pytest.fixture
+    def leak_analyzer(self, run_movie_index):
+        return EvidenceAnalyzer(SceneFacts.from_movie_intelligence(
+            movie_index=run_movie_index))
+
+    def test_clock_prose_does_not_borrow_live_refs(self, leak_analyzer):
+        # The exact Run-2 shape: a thesis about an absent clock whose prose
+        # happens to contain "around" (claim-level bridge) plus "face" and
+        # "visible" (full-prose bridges).
+        concept = {
+            "title": "The Clock That Never Ticks",
+            "hook": "h",
+            "thesis": (
+                "the film's narrative is constructed around a single "
+                "unchanging time frame, showing a failing sense of time in "
+                "scene-1 and scene-3"
+            ),
+            "why_interesting": "w",
+            "visual_opportunity": (
+                "the clock face is visible at the fixed 12:00 mark, synced "
+                "across cuts"
+            ),
+        }
+        refs = leak_analyzer.derive_refs(concept)
+        values = {r.get("value", "") for r in refs}
+        # These live refs used to be harvested from the four shared words.
+        assert "woman's face" not in values
+        assert "another person partially visible" not in values
+        assert "looking around" not in values
+        # The claim substance (title + thesis) itself grounds nothing here.
+        assert leak_analyzer.is_claim_sufficient(
+            concept, min_coverage=0.4) is False
+
+    def test_multitoken_vocab_still_derives_on_two_own_tokens(
+            self, leak_analyzer):
+        # The tightening must not over-reject: a concept that REALLY names two
+        # of a vocab item's own content tokens still derives it, and a claim
+        # built on that real content is admissible.
+        concept = {
+            "title": "Visible Person", "hook": "h", "why_interesting": "w",
+            "thesis": "a person barely visible in the frame",
+            "visual_opportunity": "x",
+        }
+        refs = leak_analyzer.derive_refs(concept)
+        values = {r.get("value", "") for r in refs}
+        assert "another person partially visible" in values
+        assert leak_analyzer.is_claim_sufficient(
+            concept, min_coverage=0.4) is True
 
 
 class TestHedgedLocationStrip:

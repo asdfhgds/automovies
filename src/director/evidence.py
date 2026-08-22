@@ -85,6 +85,33 @@ PLAN_EDITORIAL_TERMS = frozenset({
     "underscore", "underscores", "underscoring", "unfolds", "unfolding",
     "use", "uses", "using", "vast", "voice", "weave", "weaves", "wide",
     "widescreen", "zoom",
+    # Editorial terms from V3 spec that must NOT be flagged as invented:
+    "rapid", "overlapping", "counterpoint", "facial", "consecutive",
+    "abruptly", "environmental", "occasional", "noise",
+    "crosscut", "cross_cut", "ramping", "burnout", "whiplash", "sticky",
+    "naturalistic", "hum", "montage", "beat", "abrupt", "dissolve",
+    "cross", "crossing", "cutting", "cuts",
+})
+
+#: FACT vocabulary for plan grounding — these are concrete content terms that
+#: MUST appear in the movie (scene facts). Unlike editorial terms, fact terms
+#: are validated against the evidence scenes. Includes: scene IDs, characters,
+#: objects, locations, actions, events, visual facts, dialogue keywords.
+PLAN_FACT_TERMS = frozenset({
+    "scene", "character", "object", "location", "action", "event",
+    "dialogue", "visual", "shot", "cut", "frame", "sequence", "moment",
+    "character", "characters", "protagonist", "antagonist", "figure",
+    "person", "people", "man", "woman", "child", "adult",
+    "door", "window", "room", "house", "building", "car", "vehicle",
+    "gun", "weapon", "revolver", "knife", "phone", "letter", "book",
+    "table", "chair", "bed", "floor", "wall", "ceiling", "stairs",
+    "street", "road", "path", "field", "forest", "desert", "river",
+    "city", "town", "village", "interior", "exterior", "indoor", "outdoor",
+    "day", "night", "morning", "evening", "dawn", "dusk",
+    "enter", "exit", "walk", "run", "stand", "sit", "lie", "turn",
+    "look", "see", "watch", "speak", "talk", "say", "whisper", "shout",
+    "hold", "carry", "drop", "pick", "open", "close", "lock", "unlock",
+    "wait", "pause", "stop", "start", "begin", "end", "continue",
 })
 
 #: Plural / verb-form suffixes stripped when classifying plan prose tokens so
@@ -410,6 +437,10 @@ class EvidenceAnalyzer:
             ]
         visual_motifs = self._visual_motifs(concept)
 
+        # Claim-level decomposition (Phase 3)
+        claims = self.decompose_claims(concept)
+        claim_cov = self.claim_coverage(claims)
+
         return {
             "required_evidence": required,
             "requested_refs": refs,
@@ -434,6 +465,12 @@ class EvidenceAnalyzer:
             "character_focus": character_focus,
             "visual_motifs": visual_motifs,
             "supporting_scene_ids": scenes_seen,
+            # Claim-level grounding (Phase 3)
+            "claims": claims,
+            "reference_coverage": claim_cov["reference_coverage"],
+            "claim_coverage_detail": claim_cov["claim_coverage"],
+            # Preserve old label for backward compat
+            "claim_coverage": self._coverage_label(claim_ratio, has_claims=bool(claim_refs)),
         }
 
     @staticmethod
@@ -547,6 +584,10 @@ class EvidenceAnalyzer:
         whether a plan is acceptable lives in the caller (bounded regeneration
         with per-term feedback), so a single prose word never silently fails a
         whole plan — it is surfaced and corrected.
+
+        Two-vocabulary approach (Phase 4):
+        - EDITORIAL terms (PLAN_EDITORIAL_TERMS): always allowed, never flagged.
+        - FACT terms (PLAN_FACT_TERMS): must appear in evidence scenes to be grounded.
         """
         ed = editorial_direction or {}
         blob = " ".join(
@@ -585,22 +626,41 @@ class EvidenceAnalyzer:
                 continue
             seen.append(tok)
             stem = _stem(tok)
+            # Editorial vocabulary — always allowed, never flagged.
             if stem in PLAN_EDITORIAL_TERMS or tok in PLAN_EDITORIAL_TERMS:
                 continue
-            if (
-                tok in evidence_tokens
-                or stem in evidence_tokens
-                or stem in evidence_stems
-            ):
-                grounded.append(tok)
-            elif (
-                tok in movie_tokens
-                or stem in movie_tokens
-                or stem in movie_stems
-            ):
-                elsewhere.append(tok)
+            # Fact vocabulary — must be grounded in evidence scenes.
+            if stem in PLAN_FACT_TERMS or tok in PLAN_FACT_TERMS:
+                if (
+                    tok in evidence_tokens
+                    or stem in evidence_tokens
+                    or stem in evidence_stems
+                ):
+                    grounded.append(tok)
+                elif (
+                    tok in movie_tokens
+                    or stem in movie_tokens
+                    or stem in movie_stems
+                ):
+                    elsewhere.append(tok)
+                else:
+                    invented.append(tok)
             else:
-                invented.append(tok)
+                # Unknown term — not in either vocabulary.
+                if (
+                    tok in evidence_tokens
+                    or stem in evidence_tokens
+                    or stem in evidence_stems
+                ):
+                    grounded.append(tok)
+                elif (
+                    tok in movie_tokens
+                    or stem in movie_tokens
+                    or stem in movie_stems
+                ):
+                    elsewhere.append(tok)
+                else:
+                    invented.append(tok)
 
         denominator = max(1, len(grounded) + len(invented) + len(elsewhere))
         coverage = round(len(grounded) / denominator, 3)
@@ -902,13 +962,23 @@ class EvidenceAnalyzer:
                     tokens = significant_tokens(str(value))
                 if not tokens:
                     continue
-                # Match on ANY significant (content) token so prose that says
-                # "saloon" derives the canonical location "saloon, dim light".
-                # Stopwords are excluded: a vocab phrase like "man IN plaid
-                # shirt" must not fire on prose that merely contains "in".
+                # Match on the vocabulary item's HEAD (first significant, content) token
+                # OR on an overlap of at least TWO of its own content tokens.
+                # A lone NON-head shared token is too weak a bridge: a thesis
+                # that says "clock face ... is visible ... constructed around"
+                # must not harvest live items that merely share "face" /
+                # "visible" / "around" ("woman's face", "another person
+                # partially visible", "looking around"). The real-Qwen T4
+                # Run-2 "Clock That Never Ticks" concept passed the claim gate
+                # exactly this way. Single-content-word grounding is kept when
+                # the word IS the item's head ("saloon" still derives the
+                # canonical location "saloon, dim light"). Stopwords are
+                # excluded ("man IN plaid shirt" never fires on a mere "in").
                 # The ref is only emitted after verifying the FULL value
                 # grounds.
-                if any(t in prose_sig_set for t in tokens):
+                head = tokens[0]
+                hits = sum(1 for t in tokens if t in prose_sig_set)
+                if head in prose_sig_set or hits >= 2:
                     _add_ref(kind, value)
 
         # 3. Ensure at least one scene ref when concrete claims matched.
@@ -973,3 +1043,116 @@ class EvidenceAnalyzer:
             "evidence_refs": claim,
         })
         return self.is_sufficient_refs(ev, min_coverage=min_coverage)
+
+    def decompose_claims(
+        self,
+        concept: Dict[str, Any],
+        min_overlap: int = 1,
+    ) -> List[Dict[str, Any]]:
+        """Decompose a concept's thesis/hook into atomic factual claims.
+
+        Returns a list of claim dicts with:
+        - claim_id, text, type, support (scene_ids + matched facts),
+          status (SUPPORTED/PARTIAL/UNKNOWN/UNSUPPORTED), confidence, missing.
+        """
+        from director.concepts import CLAIM_TYPES
+        prose = " ".join(str(concept.get(k) or "") for k in ("title", "hook", "thesis"))
+        claims = []
+
+        # Simple heuristic: extract candidate claims from thesis by splitting
+        # on comparative/temporal markers and action verbs.
+        import re
+        # Split on common claim boundaries
+        segments = re.split(r"\b(?:and|but|because|since|while|whereas|,)\b", prose.lower())
+        segments = [s.strip() for s in segments if len(s.strip()) > 10]
+
+        for i, seg in enumerate(segments):
+            # Classify claim type from keywords
+            ctype = "VISUAL"  # default
+            if any(k in seg for k in ("same", "identical", "compare", "versus", "vs", "contrast", "differ", "match", "mirror")):
+                ctype = "COMPARISON"
+            elif any(k in seg for k in ("before", "after", "later", "earlier", "then", "subsequent", "preced", "temporal", "sequence", "loop")):
+                ctype = "TEMPORAL"
+            elif any(k in seg for k in ("character", "person", "protagonist", "actor", "she", "he", "they")):
+                ctype = "CHARACTER"
+            elif any(k in seg for k in ("object", "item", "prop", "revolver", "car", "door", "window")):
+                ctype = "OBJECT"
+            elif any(k in seg for k in ("location", "place", "setting", "scene", "room", "outdoor", "indoor")):
+                ctype = "LOCATION"
+            elif any(k in seg for k in ("action", "enter", "exit", "move", "walk", "run", "stand", "sit", "speak")):
+                ctype = "ACTION"
+            elif any(k in seg for k in ("dialogue", "speak", "say", "say", "line", "conversation")):
+                ctype = "DIALOGUE"
+            elif any(k in seg for k in ("cause", "because", "lead to", "result", "effect", "consequence")):
+                ctype = "CAUSAL"
+            elif any(k in seg for k in ("feel", "emotion", "mood", "tone", "sad", "happy", "tense", "calm", "grief", "fear")):
+                ctype = "EMOTIONAL"
+            elif any(k in seg for k in ("relationship", "between", "with", "connect", "link", "tie")):
+                ctype = "RELATIONSHIP"
+
+            # Find supporting scenes/facts
+            support_scenes = []
+            matched_facts = []
+            for sid in self.facts.used_scene_ids():
+                scene_facts = self._scene_tokens.get(sid, set())
+                # Check if this segment's tokens overlap with scene
+                seg_tokens = set(significant_tokens(seg))
+                overlap = seg_tokens & scene_facts
+                if len(overlap) >= min_overlap:
+                    support_scenes.append(sid)
+                    matched_facts.extend(list(overlap)[:5])
+
+            # Determine status
+            if len(support_scenes) >= 2 and ctype == "COMPARISON":
+                status = "SUPPORTED" if len(support_scenes) >= 2 else "PARTIAL"
+            elif len(support_scenes) >= 1:
+                status = "SUPPORTED"
+            elif ctype in ("EMOTIONAL", "CAUSAL", "RELATIONSHIP"):
+                status = "UNKNOWN"  # Interpretive claims can't be fully verified
+            else:
+                status = "UNSUPPORTED"
+
+            confidence = min(1.0, len(matched_facts) / 5.0) if matched_facts else 0.1
+
+            claims.append({
+                "claim_id": f"claim_{i+1:02d}",
+                "text": seg[:200],
+                "type": ctype,
+                "support": [{"scene_id": sid, "facts": list(set(matched_facts))} for sid in support_scenes],
+                "status": status,
+                "confidence": round(confidence, 2),
+                "missing": [] if status == "SUPPORTED" else ["insufficient_scene_evidence"],
+            })
+
+        # If no claims extracted, create a fallback from the whole thesis
+        if not claims:
+            claims.append({
+                "claim_id": "claim_01",
+                "text": prose[:200],
+                "type": "VISUAL",
+                "support": [],
+                "status": "UNKNOWN",
+                "confidence": 0.1,
+                "missing": ["no_decomposable_claims"],
+            })
+
+        return claims
+
+    def claim_coverage(
+        self,
+        claims: List[Dict[str, Any]],
+    ) -> Dict[str, float]:
+        """Calculate reference_coverage and claim_coverage from claim list."""
+        if not claims:
+            return {"reference_coverage": 0.0, "claim_coverage": 0.0}
+        supported = sum(1 for c in claims if c["status"] == "SUPPORTED")
+        partial = sum(1 for c in claims if c["status"] == "PARTIAL")
+        total = len(claims)
+        # claim_coverage weights: SUPPORTED=1.0, PARTIAL=0.5, UNKNOWN=0.2, UNSUPPORTED=0.0
+        weight_map = {"SUPPORTED": 1.0, "PARTIAL": 0.5, "UNKNOWN": 0.2, "UNSUPPORTED": 0.0}
+        claim_cov = sum(weight_map.get(c["status"], 0.0) for c in claims) / total
+        ref_cov = (supported + 0.5 * partial) / total
+        return {
+            "reference_coverage": round(ref_cov, 3),
+            "claim_coverage": round(claim_cov, 3),
+        }

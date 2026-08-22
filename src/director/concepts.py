@@ -47,6 +47,12 @@ DIVERSITY_DIMENSIONS = [
     "narrative_structure", "irony", "thematic_interpretation",
 ]
 
+# Claim types for claim-level grounding (Phase 2/3).
+CLAIM_TYPES = frozenset({
+    "ACTION", "CHARACTER", "OBJECT", "LOCATION", "DIALOGUE", "VISUAL",
+    "TEMPORAL", "COMPARISON", "RELATIONSHIP", "CAUSAL", "EMOTIONAL",
+})
+
 # Generic thesis patterns the critic must reject as "not a real idea".
 GENERIC_THESIS_PATTERNS = (
     "explores violence",
@@ -160,6 +166,17 @@ Available divergence dimensions (pick a distinct one per concept, at least 6 of
 these must appear across the set):
 {topics}
 
+FACT vs INTERPRETATION (CRITICAL):
+- FACTS are directly in the Movie Intelligence: scene IDs, characters, objects,
+  locations, actions, events, dialogue, visual events, timestamps.
+  Example: "scene-1 contains a revolver" | "the car appears in scene-7"
+- INTERPRETATIONS are creative conclusions you draw FROM facts:
+  themes, emotional readings, symbolic meanings, causal chains, comparisons.
+  Example: "the revolver symbolizes entrapment" | "the loop structure mirrors grief"
+- The system WILL REJECT concepts that present INTERPRETATIONS as FACTS.
+- You MUST ground every FACTUAL CLAIM in your thesis/hook in the inventory.
+- INTERPRETATIONS are encouraged — but label them as such in why_interesting.
+
 MANDATORY GROUNDING (from the context above):
 1. Separate your CREATIVE CLAIM from your EVIDENCE REFERENCES.
    title / hook / thesis / why_interesting are interpretation; the system
@@ -193,7 +210,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this structure:
       "title": "A SPECIFIC TITLE",
       "hook": "An engaging opening that draws the viewer in",
       "thesis": "A specific, defensible, evidence-based argument about THIS movie",
-      "why_interesting": "Why this angle is surprising / worth watching",
+      "why_interesting": "Why this angle is surprising / worth watching (label interpretations vs facts)",
       "evidence_refs": [
         {{"kind": "scene", "scene_id": "scene-1"}},
         {{"kind": "object", "value": "revolver"}}
@@ -280,6 +297,11 @@ the scene cards / WHAT ACTUALLY EXISTS in the context (see ## WORKED EXAMPLE).
 Generate {substitutes_needed} NEW replacement concepts
 that are grounded in the actual scenes shown in the context below.
 
+FACT vs INTERPRETATION REMINDER:
+- FACTS = scene IDs, characters, objects, locations, actions, dialogue, events
+- INTERPRETATIONS = themes, symbolism, emotional readings, causal/comparative claims
+- Presenting interpretations as facts = REJECTION
+
 GROUNDING RULES:
 - Keep your CREATIVE CLAIM separate from your evidence_refs.
 - The system DERIVES your evidence_refs by scanning your prose for the movie's
@@ -311,7 +333,10 @@ Return ONLY valid JSON (no markdown, no code fences):
   ]
 }}
 
-Generate now:
+evidence_refs kinds: scene | character | object | location | action | event |
+theme | mood | dialogue. Use 3-6 grounded refs per concept; at least one of them
+must be a scene id. Do NOT put interpretation inside evidence_refs — only
+catalogued identifiers.
 """
 
 
@@ -330,6 +355,22 @@ def build_plan_prompt(
     ``grounding_warnings`` (optional) list concrete terms from a previous plan
     attempt that no scene actually contains — the model must not reuse them.
     """
+    # Editorial-craft whitelist the plan may use. Inlined with a lazy import
+    # to avoid a concepts <-> evidence import cycle (evidence imports concepts
+    # at module load; this runs long after both modules are loaded).
+    from director.evidence import PLAN_EDITORIAL_TERMS
+    whitelist_blob = (
+        "\n## ALLOWED EDITORIAL VOCABULARY (whitelist)\n"
+        "editorial_direction describes CRAFT (how to cut / pace / light / "
+        "score the essay), never new content. For craft wording you may ONLY "
+        "use the terms below — do not coin film jargon not listed (e.g. "
+        "\"ramping\", \"whiplash cuts\", \"sticky zooms\", \"naturalistic "
+        "ambient hum\"). Concrete characters, objects, locations, actions, "
+        "themes, and moods must still come VERBATIM from the evidence-scene "
+        "vocabulary above:\n"
+        + ", ".join(sorted(PLAN_EDITORIAL_TERMS))
+        + "\n"
+    )
     warnings_blob = ""
     if grounding_warnings:
         warnings_blob = (
@@ -361,6 +402,7 @@ MANDATORY:
 - Do not re-caption the edited essay as if new objects exist (no "empty
   chairs", "open windows", "silhouettes", "hands on surfaces", "city noise")
   unless those exact terms are listed in the vocabulary.
+{whitelist_blob}
 {warnings_blob}
 Return ONLY valid JSON (no markdown, no code fences) with this structure:
 {{

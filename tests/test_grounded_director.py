@@ -142,11 +142,13 @@ class TestContextBuilder:
     def test_context_grounding_rules_present(self, facts, metadata):
         cb = DirectorContextBuilder()
         context, meta = cb.build_concept_generation_context(metadata, facts)
-        assert "ACTUAL SCENES" in context
+        assert "DETAILED SCENE CONTEXT" in context
+        assert "FULL MOVIE INVENTORY" in context
         assert "scene-1" in context
         assert "GROUNDING RULES" in context
         assert meta["total_scenes"] == 3
-        assert meta["scenes_included"] == 3
+        assert meta["inventory_scenes"] == 3
+        assert meta["detailed_scenes"] == 3
 
     def test_context_truncation_respects_token_budget(self, facts, metadata):
         many = SceneFacts(
@@ -154,10 +156,11 @@ class TestContextBuilder:
         )
         cb = DirectorContextBuilder(max_tokens=600, reserve_for_output=400)
         context, meta = cb.build_concept_generation_context(metadata, many)
-        # Budget = 200 tokens => must truncate, not include all 60 scenes.
+        # Budget = 200 tokens => must truncate detailed scenes, not include all 60.
         assert meta["truncated"] is True
-        assert meta["scenes_included"] < 60
+        assert meta["detailed_scenes"] < 60
         assert meta["total_scenes"] == 60
+        assert meta["inventory_scenes"] == 60
 
     def test_unknown_character_flagged_not_invented(self, facts):
         empty = SceneFacts.from_movie_intelligence(
@@ -543,6 +546,24 @@ class TestConcepts:
         prompt2 = build_plan_prompt("CTX")
         assert "GROUNDING CORRECTION" not in prompt2
 
+    def test_plan_prompt_embeds_editorial_whitelist(self):
+        """The plan prompt must show the model the PLAN_EDITORIAL_TERMS
+        whitelist verbatim, so a plan that stays inside it passes the audit
+        (the T4 Run-2 plan failed by writing generic film jargon instead)."""
+        from director.evidence import PLAN_EDITORIAL_TERMS
+        prompt = build_plan_prompt("CTX")
+        assert "ALLOWED EDITORIAL VOCABULARY (whitelist)" in prompt
+        # The FULL whitelist is embedded verbatim (comma-joined, sorted) — not
+        # a paraphrase the model could read as non-binding.
+        expected_list = ", ".join(sorted(PLAN_EDITORIAL_TERMS))
+        assert expected_list in prompt
+        # Representative craft terms are visibly on offer...
+        for term in ("slow", "zoom", "pacing", "transitions"):
+            assert term in prompt
+        # ...while generic jargon the audit would reject is explicitly banned.
+        assert "ramping" in prompt
+        assert "whiplash cuts" in prompt
+
 
 # --------------------------------------------------------------------------- #
 # Creative memory
@@ -893,8 +914,11 @@ class TestMovieGroundedDirector:
         audit = rejection["audit"]
         assert audit["sufficient"] is False
         # The specific hallucinated vocabulary is caught deterministically.
+        # "hum", "emphasizing", "ambient", "steady", "minimal", "soft", "absent",
+        # "place"/"placing" (fact terms) are now whitelisted/validated; check
+        # for genuinely ungrounded terms that are neither editorial nor fact terms.
         invented = " ".join(audit["invented_terms"])
-        for term in ("transfer", "hum", "objects"):
+        for term in ("transfer", "briefly", "precisely", "releases", "follows", "stops", "ups", "opening", "closing", "visible", "receives"):
             assert term in invented, f"invented term '{term}' must be caught"
 
     def test_write_report_writes_director_reasoning_md(self, facts, metadata, tmp_path):
