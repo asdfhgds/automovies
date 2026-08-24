@@ -26,7 +26,20 @@ Matching contract (deterministic, no LLM):
 import re
 from typing import Dict, Any, List, Optional, Iterable
 
-from director.concepts import concept_refs, render_ref
+from director.concepts import (
+    concept_refs,
+    render_ref,
+    PLAN_EDITORIAL_TERMS,
+    PLAN_TRANSITIONS,
+    PLAN_PACING,
+    PLAN_RHYTHM,
+    PLAN_EMPHASIS,
+    PLAN_REPETITION,
+    PLAN_PURPOSE,
+    PLAN_AUDIO_MOVIE,
+    PLAN_AUDIO_NARRATION,
+    PLAN_AUDIO_MUSIC,
+)
 from director.scene_facts import (
     SceneFacts,
     normalize_entity,
