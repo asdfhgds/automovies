@@ -706,7 +706,7 @@ class EvidenceAnalyzer:
 
     def plan_grounding(
         self,
-        editorial_direction: Optional[Dict[str, Any]],
+        plan: Optional[Dict[str, Any]],
         evidence_scene_ids: Optional[List[str]] = None,
         min_coverage: float = 0.55,
     ) -> Dict[str, Any]:
@@ -731,21 +731,51 @@ class EvidenceAnalyzer:
             "elsewhere_terms": [],
             "grounded_terms": [],
             "coverage": 0.0,
+            "min_coverage": 0.0,
         }
 
-        ed = editorial_direction or {}
-        editorial_plan = ed.get("editorial_plan")
+        plan = plan or {}
+        # Accept both editorial_plan (V4 structured) and editorial_direction (legacy) as structured plan
+        # Also support backward compat where plan IS the editorial_direction dict directly
+        editorial_plan = plan.get("editorial_plan") or plan.get("editorial_direction")
+        if not isinstance(editorial_plan, dict) or not (plan.get("editorial_plan") or plan.get("editorial_direction")):
+            # Plan itself might be the editorial_direction dict directly (backward compat)
+            if isinstance(plan, dict) and ("pacing" in plan or "visual_style" in plan):
+                editorial_plan = plan
+            else:
+                editorial_plan = plan.get("editorial_plan") or plan.get("editorial_direction")
 
-        # Run V4 validators if structured plan present
-        if isinstance(editorial_plan, dict):
+        # Check if we have a properly structured V4 editorial_plan with visual.scene_id
+        has_structured_plan = (
+            isinstance(editorial_plan, dict)
+            and isinstance(editorial_plan.get("visual"), dict)
+            and editorial_plan["visual"].get("scene_id")
+        )
+
+        # Run V4 validators only if structured plan with required visual.scene_id is present
+        if has_structured_plan:
             fact_val = self._validate_factual_plan(editorial_plan, evidence_scene_ids)
             editorial_val = self._validate_editorial_schema(editorial_plan)
             result["fact_validation"] = fact_val
             result["editorial_validation"] = editorial_val
             result["overall_valid"] = fact_val["valid"] and editorial_val["valid"]
+        else:
+            # No structured plan - use legacy audit results for validation
+            result["fact_validation"] = {"valid": True, "errors": [], "warnings": []}
+            result["editorial_validation"] = {"valid": True, "errors": [], "warnings": []}
+            result["overall_valid"] = False  # Will be set by legacy audit if applicable
 
         # Legacy: audit free-text editorial_direction prose (backward compat)
         # Only runs if no structured plan, or as supplementary info
+        # Check both plan["editorial_direction"] AND plan itself (backward compat where plan IS editorial_direction)
+        editorial_direction = plan.get("editorial_direction", {})
+        if not isinstance(editorial_direction, dict) or not editorial_direction:
+            # Plan itself might be the editorial_direction dict directly (backward compat)
+            if isinstance(plan, dict) and ("pacing" in plan or "visual_style" in plan):
+                editorial_direction = plan
+            else:
+                editorial_direction = {}
+
         if isinstance(editorial_direction, dict) and ("pacing" in editorial_direction or "visual_style" in editorial_direction):
             legacy_audit = self._legacy_prose_audit(editorial_direction, evidence_scene_ids, min_coverage)
             result["legacy_prose_audit"] = legacy_audit
@@ -757,11 +787,10 @@ class EvidenceAnalyzer:
             result["coverage"] = legacy_audit["coverage"]
             result["min_coverage"] = legacy_audit["min_coverage"]
             # If no structured plan, use legacy for overall_valid
-            if not isinstance(editorial_plan, dict):
+            if not isinstance(editorial_plan, dict) or not isinstance(editorial_plan.get("visual"), dict) or not editorial_plan["visual"].get("scene_id"):
                 result["overall_valid"] = legacy_audit["sufficient"]
 
         return result
-
     def _legacy_prose_audit(
         self,
         editorial_direction: Dict[str, Any],

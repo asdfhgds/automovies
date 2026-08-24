@@ -338,9 +338,9 @@ class MovieGroundedDirector:
         scene_ids = evidence_strategy.get("scene_ids", [])
 
         plan = self._plan_once(plan_ctx, duration_sec)
-        # V4: Validate structured editorial_plan + legacy prose
+        # V4: Validate structured editorial_plan (primary) + legacy prose fallback
         audit = analyzer.plan_grounding(
-            plan.get("editorial_direction"), scene_ids,
+            plan, scene_ids,
         )
 
         def _extract_corrections(audit_result: Dict[str, Any]) -> List[str]:
@@ -356,21 +356,32 @@ class MovieGroundedDirector:
             legacy = audit.get("legacy_prose_audit")
             if legacy:
                 corrections.extend(legacy.get("invented_terms", []))
+            # Missing editorial_plan
+            if not audit.get("fact_validation", {}).get("valid", False) and \
+               not audit.get("editorial_validation", {}).get("valid", False):
+                if "no editorial_plan provided" in str(audit.get("fact_validation", {}).get("errors", [])):
+                    corrections.append("MISSING_EDITORIAL_PLAN")
             return corrections
 
-        # First attempt: if not overall_valid, do ONE corrective retry
-        if not audit.get("overall_valid", False):
+        # Check if structured editorial_plan OR editorial_direction (legacy) is present
+        has_editorial_plan = isinstance(plan.get("editorial_plan"), dict) or isinstance(plan.get("editorial_direction"), dict)
+
+        # First attempt: if not overall_valid OR missing editorial_plan/editorial_direction, do ONE corrective retry
+        if not audit.get("overall_valid", False) or not has_editorial_plan:
             corrections = _extract_corrections(audit)
+            if not has_editorial_plan:
+                corrections.insert(0, "MISSING_EDITORIAL_PLAN: structured editorial_plan with visual/editing/audio sections is REQUIRED")
             if corrections:
                 plan = self._plan_once(
                     plan_ctx, duration_sec, grounding_warnings=corrections,
                 )
                 audit = analyzer.plan_grounding(
-                    plan.get("editorial_direction"), scene_ids,
+                    plan, scene_ids,
                 )
 
-        # Final gate
-        if not audit.get("overall_valid", False):
+        # Final gate - require overall_valid AND editorial_plan/editorial_direction present
+        has_editorial_plan = isinstance(plan.get("editorial_plan"), dict) or isinstance(plan.get("editorial_direction"), dict)
+        if not audit.get("overall_valid", False) or not has_editorial_plan:
             rejection = {
                 "reason": "plan editorial_plan not valid after "
                           "bounded corrective retry (strict plan gate)",
