@@ -324,12 +324,12 @@ class MovieGroundedDirector:
         analyzer: EvidenceAnalyzer,
         duration_sec: int,
     ) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-        """Build the scene-aware plan (deterministic concept + grounded prose).
+        """Build the scene-aware plan (deterministic concept + structured editorial plan).
 
         Returns ``(plan, None)`` on success, or ``(None, rejection)`` when the
-        plan's editorial_direction cannot be grounded after the bounded
-        corrective retry. A rejected plan is NEVER emitted downstream — the
-        strict plan gate mirrors the concept gate's honest FAIL.
+        plan's editorial_plan cannot be validated after the bounded corrective
+        retry. A rejected plan is NEVER emitted downstream -- the strict plan gate
+        mirrors the concept gate's honest FAIL.
         """
         evidence_strategy = analyzer.build_evidence_strategy(selected)
         plan_ctx = self.context_builder.build_plan_context(
@@ -338,30 +338,41 @@ class MovieGroundedDirector:
         scene_ids = evidence_strategy.get("scene_ids", [])
 
         plan = self._plan_once(plan_ctx, duration_sec)
-        # Deterministically audit the plan's editorial_direction against the
-        # evidence scenes. If the model invented concrete content (scope leak
-        # or outright hallucination), do ONE bounded corrective retry with the
-        # exact offending terms fed back — never more.
+        # V4: Validate structured editorial_plan + legacy prose
         audit = analyzer.plan_grounding(
             plan.get("editorial_direction"), scene_ids,
         )
-        if not audit["sufficient"] and audit.get("invented_terms"):
-            corrections = list(audit["invented_terms"])
-            if len(corrections) < 10 and audit.get("elsewhere_terms"):
-                corrections += list(audit["elsewhere_terms"])[: 10 - len(corrections)]
-            plan = self._plan_once(
-                plan_ctx, duration_sec, grounding_warnings=corrections,
-            )
-            audit = analyzer.plan_grounding(
-                plan.get("editorial_direction"), scene_ids,
-            )
 
-        if not audit["sufficient"]:
-            # STRICT PLAN GATE: not grounded -> not emitted, like the concept
-            # gate's honest FAIL. The rejection (with the deterministic audit)
-            # is surfaced so the reasoning report shows exactly why.
+        def _extract_corrections(audit_result: Dict[str, Any]) -> List[str]:
+            """Extract correction terms from V4 audit for corrective retry."""
+            corrections: List[str] = []
+            # Fact validation errors
+            fact_val = audit.get("fact_validation", {})
+            corrections.extend(fact_val.get("errors", []))
+            # Editorial validation errors
+            editorial_val = audit.get("editorial_validation", {})
+            corrections.extend(editorial_val.get("errors", []))
+            # Legacy prose invented terms
+            legacy = audit.get("legacy_prose_audit")
+            if legacy:
+                corrections.extend(legacy.get("invented_terms", []))
+            return corrections
+
+        # First attempt: if not overall_valid, do ONE corrective retry
+        if not audit.get("overall_valid", False):
+            corrections = _extract_corrections(audit)
+            if corrections:
+                plan = self._plan_once(
+                    plan_ctx, duration_sec, grounding_warnings=corrections,
+                )
+                audit = analyzer.plan_grounding(
+                    plan.get("editorial_direction"), scene_ids,
+                )
+
+        # Final gate
+        if not audit.get("overall_valid", False):
             rejection = {
-                "reason": "plan editorial_direction not sufficient after "
+                "reason": "plan editorial_plan not valid after "
                           "bounded corrective retry (strict plan gate)",
                 "audit": audit,
                 "evidence_scene_ids": scene_ids,
@@ -370,12 +381,12 @@ class MovieGroundedDirector:
 
         plan["grounding_audit"] = audit
         plan.setdefault("format", {"type": "short_video_essay",
-                                   "duration_sec": duration_sec})
+                                    "duration_sec": duration_sec})
         plan.setdefault("editorial_direction", {})
         # The plan is FOR the selected concept: its concept block is fixed and
         # deterministic (never re-imagined by the model). The model only
-        # contributes format + editorial_direction, grounded in the evidence
-        # scenes below.
+        # contributes format + editorial_plan + editorial_direction (prose fallback),
+        # grounded in the evidence scenes below.
         plan["concept"] = {
             "title": selected.get("title", ""),
             "hook": selected.get("hook", ""),
@@ -384,7 +395,6 @@ class MovieGroundedDirector:
         # The evidence_strategy is deterministic, not model-invented.
         plan["evidence_strategy"] = evidence_strategy
         return plan, None
-
     def _plan_once(
         self,
         plan_ctx: str,

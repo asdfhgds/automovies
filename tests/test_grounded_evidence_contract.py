@@ -746,7 +746,7 @@ class TestBoundedRegeneration:
 
             def __call__(self, prompt):
                 self.calls.append(prompt)
-                if "finalizing the plan" in prompt:
+                if "finalizing the plan" in prompt or "finalizing the STRUCTURED plan" in prompt:
                     return json.dumps({
                         "concept": {
                             "title": "A Different Movie",

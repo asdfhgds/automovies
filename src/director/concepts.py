@@ -69,6 +69,69 @@ GENERIC_THESIS_PATTERNS = (
 )
 
 
+# -- Structured Editorial Plan Schema (V4) ------------------------------------
+
+# Allowed enum values for structured editorial plan fields.
+PLAN_TRANSITIONS = frozenset({
+    "cut", "crossfade", "fade", "dissolve", "jump_cut", "match_cut",
+    "smash_cut", "wipe", "iris", "none",
+})
+
+PLAN_PACING = frozenset({
+    "slow", "measured", "moderate", "gradual", "steady", "rhythmic",
+    "rapid", "fast", "accelerating", "decelerating", "variable",
+})
+
+PLAN_RHYTHM = frozenset({
+    "slow", "steady", "measured", "syncopated", "driving", "pulsing",
+    "irregular", "free",
+})
+
+PLAN_EMPHASIS = frozenset({
+    "character", "action", "object", "location", "emotion", "dialogue",
+    "visual", "sound", "silence", "contrast", "repetition", "detail",
+})
+
+PLAN_REPETITION = frozenset({
+    "none", "motif", "callback", "echo", "parallel", "mirror", "loop",
+})
+
+PLAN_PURPOSE = frozenset({
+    "contrast", "parallel", "progression", "reveal", "emphasis",
+    "transition", "pacing", "mood", "character", "theme", "tension",
+    "resolution", "setup", "payoff",
+})
+
+PLAN_AUDIO_MOVIE = frozenset({
+    "retain", "mute", "filter", "duck",
+})
+
+PLAN_AUDIO_NARRATION = frozenset({
+    "none", "minimal", "moderate", "dominant", "continuous", "sparse",
+})
+
+PLAN_AUDIO_MUSIC = frozenset({
+    "none", "low", "moderate", "high", "diegetic_only", "score_only",
+})
+
+# Valid keys for structured editorial plan (V4)
+STRUCTURED_PLAN_KEYS = frozenset({
+    "visual", "editing", "audio",
+})
+
+VISUAL_PLAN_KEYS = frozenset({
+    "scene_id", "start_sec", "end_sec", "source_fact_refs",
+})
+
+EDITING_PLAN_KEYS = frozenset({
+    "transition", "pacing", "rhythm", "emphasis", "repetition", "purpose",
+})
+
+AUDIO_PLAN_KEYS = frozenset({
+    "movie_audio", "narration", "music",
+})
+
+
 # -- Evidence references (the structured grounding contract) -----------------
 
 def _normalize_ref(raw: Any) -> Optional[Dict[str, Any]]:
@@ -345,29 +408,23 @@ def build_plan_prompt(
     duration_sec: int = 90,
     grounding_warnings: Optional[List[str]] = None,
 ) -> str:
-    """Prompt to build the final scene-aware director plan.
+    """Prompt to build the final scene-aware director plan with STRUCTURED editorial plan.
 
     The concept is already decided (deterministic — the selected concept). The
-    model must only produce ``format`` and ``editorial_direction``, and every
-    claim there must be grounded in the evidence scenes shown. It must NOT
-    invent new characters, objects, locations, or moments.
+    model must produce a STRUCTURED editorial plan with separate sections for
+    visual, editing, and audio. Factual fields (scene IDs, timestamps, refs)
+    must be grounded in the evidence scenes. Editorial fields use controlled
+    vocabularies and do NOT require movie grounding.
 
-    ``grounding_warnings`` (optional) list concrete terms from a previous plan
-    attempt that no scene actually contains — the model must not reuse them.
+    ``grounding_warnings`` (optional) list concrete FACTUAL terms from a previous
+    plan attempt that no scene actually contains — the model must not reuse them.
     """
-    # Editorial-craft whitelist the plan may use. Inlined with a lazy import
-    # to avoid a concepts <-> evidence import cycle (evidence imports concepts
-    # at module load; this runs long after both modules are loaded).
+    # Lazy import to avoid cycles.
     from director.evidence import PLAN_EDITORIAL_TERMS
     whitelist_blob = (
         "\n## ALLOWED EDITORIAL VOCABULARY (whitelist)\n"
-        "editorial_direction describes CRAFT (how to cut / pace / light / "
-        "score the essay), never new content. For craft wording you may ONLY "
-        "use the terms below — do not coin film jargon not listed (e.g. "
-        "\"ramping\", \"whiplash cuts\", \"sticky zooms\", \"naturalistic "
-        "ambient hum\"). Concrete characters, objects, locations, actions, "
-        "themes, and moods must still come VERBATIM from the evidence-scene "
-        "vocabulary above:\n"
+        "The structured fields below use controlled vocabularies. If you must "
+        "write prose in any free-text field, use ONLY these terms (flat list):\n"
         + ", ".join(sorted(PLAN_EDITORIAL_TERMS))
         + "\n"
     )
@@ -375,33 +432,41 @@ def build_plan_prompt(
     if grounding_warnings:
         warnings_blob = (
             "\n## GROUNDING CORRECTION (your previous plan was audited)\n"
-            "The following concrete terms you used do NOT exist in any evidence "
-            "scene. Remove them and re-describe the passage abstractly (e.g. "
-            "\"the figure's stillness\") or with a verbatim vocabulary term:\n"
+            "The following FACTUAL terms you used do NOT exist in any evidence "
+            "scene. Remove them and re-describe using structured fields or "
+            "verbatim vocabulary terms:\n"
             + "\n".join(f"- {t}" for t in grounding_warnings)
             + "\n"
         )
     return f"""
-You are a director finalizing the plan for the SELECTED CONCEPT shown below,
-grounded ONLY in the evidence scenes also shown. The video is {duration_sec}
-seconds.
+You are a director finalizing the plan (STRUCTURED plan) for the SELECTED CONCEPT
+shown below, grounded ONLY in the evidence scenes also shown. The video is
+{duration_sec} seconds.
 
-MANDATORY:
+MANDATORY STRUCTURE:
 - The concept (title / hook / thesis) is FINAL and given to you. Copy it
   verbatim into "concept". Do not write a different concept, movie, or thesis.
-- editorial_direction must describe ONLY the moments, objects, characters, and
-  locations that appear in the evidence scenes below. NEVER invent a new scene,
-  character, object, location, or line of dialogue.
-- Concrete characters, objects, locations, actions, themes, and moods may ONLY
-  be cited if they appear VERBATIM in "VERBATIM VOCABULARY FOR THE EVIDENCE
-  SCENES ONLY". Copy each one exactly — do not paraphrase, pluralize, or
-  invent variants.
-- If a moment is ambiguous, describe it abstractly (e.g. "the figure's
-  stillness") rather than inventing concrete objects (e.g. a broken clock, a
-  patient's bed) that are not in the scenes.
-- Do not re-caption the edited essay as if new objects exist (no "empty
-  chairs", "open windows", "silhouettes", "hands on surfaces", "city noise")
-  unless those exact terms are listed in the vocabulary.
+- You MUST produce a STRUCTURED editorial_plan with these sections:
+  * "visual":   {{scene_id, start_sec, end_sec, source_fact_refs}}
+  * "editing":  {{transition, pacing, rhythm, emphasis, repetition, purpose}}
+  * "audio":    {{movie_audio, narration, music}}
+- Factual fields (scene_id, start_sec, end_sec, source_fact_refs) MUST be
+  grounded in the evidence scenes. Use verbatim identifiers from the vocabulary.
+- Editorial fields use CONTROLLED VOCABULARIES (see below) and do NOT require
+  movie grounding.
+- If you need free-text prose, use ONLY the ALLOWED EDITORIAL VOCABULARY.
+
+CONTROLLED VOCABULARIES (editorial fields — no movie grounding needed):
+- transition: {", ".join(sorted(PLAN_TRANSITIONS))}
+- pacing: {", ".join(sorted(PLAN_PACING))}
+- rhythm: {", ".join(sorted(PLAN_RHYTHM))}
+- emphasis: {", ".join(sorted(PLAN_EMPHASIS))}
+- repetition: {", ".join(sorted(PLAN_REPETITION))}
+- purpose: {", ".join(sorted(PLAN_PURPOSE))}
+- movie_audio: {", ".join(sorted(PLAN_AUDIO_MOVIE))}
+- narration: {", ".join(sorted(PLAN_AUDIO_NARRATION))}
+- music: {", ".join(sorted(PLAN_AUDIO_MUSIC))}
+
 {whitelist_blob}
 {warnings_blob}
 Return ONLY valid JSON (no markdown, no code fences) with this structure:
@@ -415,18 +480,40 @@ Return ONLY valid JSON (no markdown, no code fences) with this structure:
     "type": "short_video_essay",
     "duration_sec": {duration_sec}
   }},
+  "editorial_plan": {{
+    "visual": {{
+      "scene_id": "scene-1",
+      "start_sec": 1.2,
+      "end_sec": 3.8,
+      "source_fact_refs": ["revolver", "scene-1"]
+    }},
+    "editing": {{
+      "transition": "cut",
+      "pacing": "gradual",
+      "rhythm": "steady",
+      "emphasis": "character",
+      "repetition": "none",
+      "purpose": "contrast"
+    }},
+    "audio": {{
+      "movie_audio": "retain",
+      "narration": "dominant",
+      "music": "low"
+    }}
+  }},
   "editorial_direction": {{
-    "pacing": "how the pacing supports the argument",
-    "visual_style": "concrete visual treatment grounded in the cited scenes",
-    "audio_style": "music/sound design suggestion",
-    "editing_style": "how cuts/transitions carry the thesis"
+    "pacing": "fallback prose if needed",
+    "visual_style": "fallback prose if needed",
+    "audio_style": "fallback prose if needed",
+    "editing_style": "fallback prose if needed"
   }}
 }}
 
 The evidence_strategy is computed deterministically from the scenes by the
-system, so you only provide concept (copied) / format / editorial_direction.
-Base every claim in editorial_direction on the evidence scenes shown. Do not
-invent characters, objects, or moments.
+system, so you only provide concept (copied) / format / editorial_plan /
+editorial_direction (prose fallback).
+Base every FACTUAL claim on the evidence scenes shown. Do not invent
+characters, objects, locations, or moments.
 
 Generate now:
 """
@@ -560,20 +647,30 @@ def _normalize_concept(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def parse_plan(response_text: str) -> Optional[Dict[str, Any]]:
-    """Parse the final plan response."""
+    """Parse the final plan response (supports both V4 structured and legacy format)."""
     data = extract_json(response_text)
     if not isinstance(data, dict):
         return None
     concept = data.get("concept")
+    # V4: structured editorial_plan (primary)
+    editorial_plan = data.get("editorial_plan")
+    # Legacy: free-text editorial_direction (backward compat)
     ed = data.get("editorial_direction")
     fmt = data.get("format") or {}
-    if not isinstance(concept, dict) or not isinstance(ed, dict):
+    if not isinstance(concept, dict):
         return None
-    return {
+    # At least one of editorial_plan or editorial_direction must be present
+    if not isinstance(ed, dict) and not isinstance(editorial_plan, dict):
+        return None
+    result = {
         "concept": dict(concept),
         "format": dict(fmt) if isinstance(fmt, dict) else {},
-        "editorial_direction": dict(ed),
     }
+    if isinstance(editorial_plan, dict):
+        result["editorial_plan"] = dict(editorial_plan)
+    if isinstance(ed, dict):
+        result["editorial_direction"] = dict(ed)
+    return result
 
 
 def is_generic_thesis(thesis: str) -> bool:
