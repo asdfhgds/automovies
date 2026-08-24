@@ -261,6 +261,12 @@ MANDATORY GROUNDING (from the context above):
 6. A WORKED EXAMPLE is included in the context (## WORKED EXAMPLE). It shows
    the ONLY way evidence_refs can pass: values copied verbatim from the scene
    cards. Mirror its ref style; write your own wording.
+7. ZERO TOLERANCE FOR HALLUCINATION: Every noun in your thesis/hook that names
+   a character, object, location, action, or scene MUST appear VERBATIM in the
+   WHAT ACTUALLY EXISTS section above. If you invent a single noun — a
+   character name, object, location, or scene ID not in the provided vocabulary —
+   your concept WILL BE REJECTED. Check every noun against the vocabulary before
+   writing.
 
 DO NOT produce five versions of "the movie explores violence/problem X". Each
 concept must have its own hook, thesis, and a distinct set of grounded
