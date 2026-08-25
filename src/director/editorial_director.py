@@ -249,6 +249,9 @@ class EditorialDirector:
         Returns:
             A structured Editorial Decision List dict.
         """
+        # Calculate clip duration from supporting scenes in grounding contract
+        clip_duration = self._calculate_clip_duration(grounding_contract)
+        
         # Build the editorial decision list
         edl = {
             "concept_title": grounded_script.get("concept", {}).get("title", ""),
@@ -258,6 +261,7 @@ class EditorialDirector:
                 grounding_contract.get("supporting_scenes", []),
                 grounding_contract.get("evidence_refs", []),
                 editorial_plan=editorial_plan,
+                clip_duration=clip_duration,
             ),
             "metadata": {
                 "project_id": "",
@@ -282,9 +286,14 @@ class EditorialDirector:
         supporting_scenes: List[Dict[str, Any]],
         evidence_refs: List[Dict[str, Any]],
         editorial_plan: Dict[str, Any],
+        clip_duration: float = 3.0,
     ) -> List[Dict[str, Any]]:
         """Build editorial segments from grounded script sections."""
         segments = []
+        
+        # Calculate clip duration from supporting scenes if not provided
+        if clip_duration <= 0:
+            clip_duration = 3.0
         
         # Extract editorial plan sections
         visual_plan = editorial_plan.get("visual", {})
@@ -305,7 +314,7 @@ class EditorialDirector:
             )
             
             # Build pacing from plan
-            pacing = self._build_pacing(editorial_plan.get("editing", {}))
+            pacing = self._build_pacing(editorial_plan.get("editing", {}), clip_duration=clip_duration)
             
             # Build audio strategy
             audio = self._build_audio_strategy(
@@ -405,8 +414,8 @@ class EditorialDirector:
         else:
             return {"type": "medium", "reason": "standard coverage"}
     
-    def _build_pacing(self, editing_plan: Dict[str, Any]) -> Dict[str, Any]:
-        """Build pacing config from editorial plan."""
+def _build_pacing(self, editing_plan: Dict[str, Any], clip_duration: float = 3.0) -> Dict[str, Any]:
+        """Build pacing config from editorial plan, respecting clip duration."""
         pacing = {}
         if "pacing" in editing_plan:
             pacing["rhythm"] = editing_plan.get("pacing", "measured")
@@ -417,13 +426,13 @@ class EditorialDirector:
         if "purpose" in editing_plan:
             pacing["purpose"] = editing_plan["purpose"]
         
-        # Set defaults
+        # Set defaults based on clip duration
         pacing.setdefault("rhythm", "measured")
-        pacing.setdefault("duration_hint_sec", 3.0)
-        return pacing
-    
-    def _build_audio_strategy(
-        self,
+        # Use clip duration as hint, but cap segment duration to a reasonable max
+        pacing.setdefault("duration_hint_sec", min(clip_duration, 5.0))
+return pacing
+
+
         audio_plan: Dict[str, Any],
         movie_audio: str = "retain",
         narration: str = "dominant",
@@ -470,6 +479,17 @@ class EditorialDirector:
         
         return editing
     
+    def _calculate_clip_duration(self, grounding_contract: Dict[str, Any]) -> float:
+        """Calculate the total clip duration from supporting scenes in the grounding contract."""
+        supporting_scenes = grounding_contract.get("supporting_scenes", [])
+        total_duration = 0.0
+        for scene in grounding_contract.get("supporting_scenes", []):
+            start = scene.get("start_sec")
+            end = scene.get("end_sec")
+            if start is not None and end is not None:
+                total_duration += max(0.0, end - start)
+        return total_duration if total_duration > 0 else 3.0  # fallback to 3.0s if no scenes
+
     def _now_iso(self) -> str:
         from datetime import datetime
         return datetime.utcnow().isoformat() + "Z"

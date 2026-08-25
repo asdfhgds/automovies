@@ -237,6 +237,9 @@ class GroundedScriptGenerator:
         concept = contract.get("concept", {})
         format_info = contract.get("format", {})
         
+        # Calculate the actual available duration from supporting scenes
+        available_duration = self._calculate_available_duration(contract)
+        
         # Build the script structure
         script = {
             "concept": {
@@ -247,7 +250,7 @@ class GroundedScriptGenerator:
             },
             "format": {
                 "type": contract.get("format", {}).get("type", "short_video_essay"),
-                "duration_sec": contract.get("format", {}).get("duration_sec", 90),
+                "duration_sec": int(available_duration),  # Use actual clip duration
             },
             "sections": self._build_sections(contract),
             "metadata": {
@@ -304,6 +307,17 @@ class GroundedScriptGenerator:
         
         return sections
     
+    def _calculate_available_duration(self, contract: Dict[str, Any]) -> float:
+        """Calculate the total available duration from supporting scenes."""
+        supporting_scenes = contract.get("supporting_scenes", [])
+        total_duration = 0.0
+        for scene in contract.get("supporting_scenes", []):
+            start = scene.get("start_sec")
+            end = scene.get("end_sec")
+            if start is not None and end is not None:
+                total_duration += max(0.0, end - start)
+        return total_duration if total_duration > 0 else 90.0  # fallback to 90s if no scenes
+
     def _now_iso(self) -> str:
         from datetime import datetime
         return datetime.utcnow().isoformat() + "Z"
