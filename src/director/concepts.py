@@ -466,6 +466,7 @@ def build_plan_prompt(
     context: str,
     duration_sec: int = 90,
     grounding_warnings: Optional[List[str]] = None,
+    selected_concept: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Prompt to build the final scene-aware director plan with STRUCTURED editorial plan.
 
@@ -480,6 +481,38 @@ def build_plan_prompt(
     """
     # Lazy import to avoid cycles.
     from director.evidence import PLAN_EDITORIAL_TERMS
+    whitelist_blob = (
+        "\n## ALLOWED EDITORIAL VOCABULARY (whitelist)\n"
+        "The structured fields below use controlled vocabularies. If you must "
+        "write prose in any free-text field, use ONLY these terms (flat list):\n"
+        + ", ".join(sorted(PLAN_EDITORIAL_TERMS))
+        + "\n"
+    )
+    warnings_blob = ""
+    if grounding_warnings:
+        warnings_blob = (
+            "\n## GROUNDING CORRECTION (your previous plan was audited)\n"
+            "The following FACTUAL terms you used do NOT exist in any evidence "
+            "scene. Remove them and re-describe using structured fields or "
+            "verbatim vocabulary terms:\n"
+            + "\n".join(f"- {t}" for t in grounding_warnings)
+            + "\n"
+        )
+
+# Build the structured editorial plan example using the selected concept's evidence refs
+    example_scene_id = "scene-1"
+    example_fact_refs = '["revolver", "scene-1"]'
+    concept_refs_list = []
+    if selected_concept:
+        from director.concepts import concept_refs
+        concept_refs_list = concept_refs(selected_concept)
+        scene_refs = [r for r in concept_refs_list if r.get("kind") == "scene"]
+        if scene_refs:
+            example_scene_id = scene_refs[0].get("scene_id", "scene-1")
+        fact_refs = [r for r in concept_refs_list if r.get("kind") != "scene"]
+        if fact_refs:
+            example_fact_refs = json.dumps([r.get("value", "") for r in fact_refs])
+
     whitelist_blob = (
         "\n## ALLOWED EDITORIAL VOCABULARY (whitelist)\n"
         "The structured fields below use controlled vocabularies. If you must "
@@ -541,10 +574,10 @@ Return ONLY valid JSON (no markdown, no code fences) with this structure:
   }},
   "editorial_plan": {{
     "visual": {{
-      "scene_id": "scene-1",
+      "scene_id": "{example_scene_id}",
       "start_sec": 1.2,
       "end_sec": 3.8,
-      "source_fact_refs": ["revolver", "scene-1"]
+      "source_fact_refs": {example_fact_refs}
     }},
     "editing": {{
       "transition": "cut",

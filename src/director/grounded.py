@@ -337,7 +337,7 @@ class MovieGroundedDirector:
         )
         scene_ids = evidence_strategy.get("scene_ids", [])
 
-        plan = self._plan_once(plan_ctx, duration_sec)
+        plan = self._plan_once(plan_ctx, duration_sec, selected_concept=selected)
         # V4: Validate structured editorial_plan (primary) + legacy prose fallback
         audit = analyzer.plan_grounding(
             plan, scene_ids,
@@ -373,7 +373,7 @@ class MovieGroundedDirector:
                 corrections.insert(0, "MISSING_EDITORIAL_PLAN: structured editorial_plan with visual/editing/audio sections is REQUIRED")
             if corrections:
                 plan = self._plan_once(
-                    plan_ctx, duration_sec, grounding_warnings=corrections,
+                    plan_ctx, duration_sec, grounding_warnings=corrections, selected_concept=selected,
                 )
                 audit = analyzer.plan_grounding(
                     plan, scene_ids,
@@ -411,11 +411,13 @@ class MovieGroundedDirector:
         plan_ctx: str,
         duration_sec: int,
         grounding_warnings: Optional[List[str]] = None,
+        selected_concept: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """One plan LLM call (parse-tolerant). Auditing lives in the caller."""
         prompt = build_plan_prompt(
             plan_ctx, duration_sec=duration_sec,
             grounding_warnings=grounding_warnings,
+            selected_concept=selected_concept,
         )
         plan = parse_plan(self.llm(prompt)) or {}
         self.stats["llm_calls"] += 1
