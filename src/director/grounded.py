@@ -24,7 +24,7 @@ Pipeline (stops at the plan — NOT wired to the script stage yet)::
     ConceptCritic (feasibility dimensions) + evidence coverage -> select
       |
       v
-    plan (concept + evidence_strategy + format + editorial_direction)
+    plan (concept + evidence_strategy + format + editorial_plan)
       |
       v
     CreativeMemory (store selected concept)  +  reports/director_reasoning.md
@@ -363,10 +363,10 @@ class MovieGroundedDirector:
                     corrections.append("MISSING_EDITORIAL_PLAN")
             return corrections
 
-        # Check if structured editorial_plan OR editorial_direction (legacy) is present
-        has_editorial_plan = isinstance(plan.get("editorial_plan"), dict) or isinstance(plan.get("editorial_direction"), dict)
+        # Check if structured editorial_plan is present
+        has_editorial_plan = isinstance(plan.get("editorial_plan"), dict)
 
-        # First attempt: if not overall_valid OR missing editorial_plan/editorial_direction, do ONE corrective retry
+        # First attempt: if not overall_valid OR missing editorial_plan, do ONE corrective retry
         if not audit.get("overall_valid", False) or not has_editorial_plan:
             corrections = _extract_corrections(audit)
             if not has_editorial_plan:
@@ -379,8 +379,8 @@ class MovieGroundedDirector:
                     plan, scene_ids,
                 )
 
-        # Final gate - require overall_valid AND editorial_plan/editorial_direction present
-        has_editorial_plan = isinstance(plan.get("editorial_plan"), dict) or isinstance(plan.get("editorial_direction"), dict)
+        # Final gate - require overall_valid AND editorial_plan present
+        has_editorial_plan = isinstance(plan.get("editorial_plan"), dict)
         if not audit.get("overall_valid", False) or not has_editorial_plan:
             rejection = {
                 "reason": "plan editorial_plan not valid after "
@@ -393,11 +393,9 @@ class MovieGroundedDirector:
         plan["grounding_audit"] = audit
         plan.setdefault("format", {"type": "short_video_essay",
                                     "duration_sec": duration_sec})
-        plan.setdefault("editorial_direction", {})
         # The plan is FOR the selected concept: its concept block is fixed and
         # deterministic (never re-imagined by the model). The model only
-        # contributes format + editorial_plan + editorial_direction (prose fallback),
-        # grounded in the evidence scenes below.
+        # contributes format + editorial_plan, grounded in the evidence scenes below.
         plan["concept"] = {
             "title": selected.get("title", ""),
             "hook": selected.get("hook", ""),

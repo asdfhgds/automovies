@@ -43,7 +43,7 @@ def build_grounding_contract(
     - ``visual_motifs``      <- plan.evidence_strategy.visual_motifs
     - ``character_focus``    <- plan.evidence_strategy.character_focus
     - ``format``             <- plan.format
-    - ``editorial_intent``   <- plan.editorial_direction
+    - ``editorial_intent``   <- plan.editorial_plan
 
     Times on supporting scenes are resolved from the scene facts so downstream
     stages can build excerpt windows without a second lookup.
@@ -71,7 +71,7 @@ def build_grounding_contract(
     if "duration_sec" not in fmt:
         fmt["duration_sec"] = int(movie_index.get("movie", {}).get("duration_sec") or 90)
 
-    editorial = dict(plan.get("editorial_direction") or {})
+    editorial = dict(plan.get("editorial_plan") or {})
     return {
         "concept": concept,
         "evidence_refs": [

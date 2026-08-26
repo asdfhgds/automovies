@@ -89,11 +89,20 @@ def build_report(
             motifs = (ev or {}).get("visual_motifs") or []
             if motifs:
                 lines.append(_line("Visual opportunities", ", ".join(motifs)))
-            ed = plan.get("editorial_direction") or {}
+            ep = plan.get("editorial_plan") or {}
             lines.append("")
-            for k in ("pacing", "visual_style", "audio_style", "editing_style"):
-                if ed.get(k):
-                    lines.append(_line(k.replace("_", " ").title(), ed.get(k)))
+            if ep.get("editing"):
+                for k in ("transition", "pacing", "rhythm", "emphasis", "repetition", "purpose"):
+                    if ep["editing"].get(k):
+                        lines.append(_line(f"editing.{k}", ep["editing"][k]))
+            if ep.get("audio"):
+                for k in ("movie_audio", "narration", "music"):
+                    if ep["audio"].get(k):
+                        lines.append(_line(f"audio.{k}", ep["audio"][k]))
+            if ep.get("visual"):
+                lines.append(_line("visual.scene_id", ep["visual"].get("scene_id")))
+                lines.append(_line("visual.start_sec", ep["visual"].get("start_sec")))
+                lines.append(_line("visual.end_sec", ep["visual"].get("end_sec")))
             audit = plan.get("grounding_audit") or {}
             if audit:
                 lines.append("")

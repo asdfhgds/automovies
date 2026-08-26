@@ -60,7 +60,7 @@ CONCRETE_CLAIM_KINDS = frozenset({
 })
 
 
-#: Editorial/craft vocabulary allowed in plan ``editorial_direction`` prose.
+#: Editorial/craft vocabulary allowed in plan structured fields.
 #: These describe HOW to cut / score / frame the essay, never claims about
 #: on-screen content, so the plan auditor must not flag them as invented.
 #: Also includes common neutral process/generic verbs and abstract staging
@@ -748,15 +748,14 @@ class EvidenceAnalyzer:
         }
 
         plan = plan or {}
-        # Accept both editorial_plan (V4 structured) and editorial_direction (legacy) as structured plan
-        # Also support backward compat where plan IS the editorial_direction dict directly
-        editorial_plan = plan.get("editorial_plan") or plan.get("editorial_direction")
-        if not isinstance(editorial_plan, dict) or not (plan.get("editorial_plan") or plan.get("editorial_direction")):
-            # Plan itself might be the editorial_direction dict directly (backward compat)
-            if isinstance(plan, dict) and ("pacing" in plan or "visual_style" in plan):
-                editorial_plan = plan
-            else:
-                editorial_plan = plan.get("editorial_plan") or plan.get("editorial_direction")
+        # Require structured editorial_plan (V4)
+        editorial_plan = plan.get("editorial_plan")
+        if not isinstance(editorial_plan, dict):
+            return {
+                "fact_validation": {"valid": False, "errors": ["no editorial_plan provided"], "warnings": []},
+                "editorial_validation": {"valid": False, "errors": ["no editorial_plan provided"], "warnings": []},
+                "overall_valid": False,
+            }
 
         # Check if we have a properly structured V4 editorial_plan with visual.scene_id
         has_structured_plan = (
@@ -773,157 +772,12 @@ class EvidenceAnalyzer:
             result["editorial_validation"] = editorial_val
             result["overall_valid"] = fact_val["valid"] and editorial_val["valid"]
         else:
-            # No structured plan - use legacy audit results for validation
-            result["fact_validation"] = {"valid": True, "errors": [], "warnings": []}
-            result["editorial_validation"] = {"valid": True, "errors": [], "warnings": []}
-            result["overall_valid"] = False  # Will be set by legacy audit if applicable
-
-        # Legacy: audit free-text editorial_direction prose (backward compat)
-        # Only runs if no structured plan, or as supplementary info
-        # Check both plan["editorial_direction"] AND plan itself (backward compat where plan IS editorial_direction)
-        editorial_direction = plan.get("editorial_direction", {})
-        if not isinstance(editorial_direction, dict) or not editorial_direction:
-            # Plan itself might be the editorial_direction dict directly (backward compat)
-            if isinstance(plan, dict) and ("pacing" in plan or "visual_style" in plan):
-                editorial_direction = plan
-            else:
-                editorial_direction = {}
-
-        if isinstance(editorial_direction, dict) and ("pacing" in editorial_direction or "visual_style" in editorial_direction):
-            legacy_audit = self._legacy_prose_audit(editorial_direction, evidence_scene_ids, min_coverage)
-            result["legacy_prose_audit"] = legacy_audit
-            # Merge legacy keys for backward compatibility
-            result["sufficient"] = legacy_audit["sufficient"]
-            result["invented_terms"] = legacy_audit["invented_terms"]
-            result["elsewhere_terms"] = legacy_audit["elsewhere_terms"]
-            result["grounded_terms"] = legacy_audit["grounded_terms"]
-            result["coverage"] = legacy_audit["coverage"]
-            result["min_coverage"] = legacy_audit["min_coverage"]
-            # If no structured plan, use legacy for overall_valid
-            if not isinstance(editorial_plan, dict) or not isinstance(editorial_plan.get("visual"), dict) or not editorial_plan["visual"].get("scene_id"):
-                result["overall_valid"] = legacy_audit["sufficient"]
+            # No structured plan with visual.scene_id - invalid
+            result["fact_validation"] = {"valid": False, "errors": ["missing visual.scene_id in editorial_plan"], "warnings": []}
+            result["editorial_validation"] = {"valid": False, "errors": ["missing visual.scene_id in editorial_plan"], "warnings": []}
+            result["overall_valid"] = False
 
         return result
-    def _legacy_prose_audit(
-        self,
-        editorial_direction: Dict[str, Any],
-        evidence_scene_ids: Optional[List[str]] = None,
-        min_coverage: float = 0.55,
-    ) -> Dict[str, Any]:
-        """Legacy word-scan audit for free-text editorial_direction (backward compat)."""
-        ed = editorial_direction or {}
-        blob = " ".join(
-            str(v) for v in ed.values() if isinstance(v, str) and v.strip()
-        )
-        # Extract single-character tokens (test placeholders) before filtering
-        single_char_tokens = set()
-        for v in ed.values():
-            if isinstance(v, str):
-                for tok in v.split():
-                    if len(tok) == 1:
-                        single_char_tokens.add(tok)
-        sig = significant_tokens(blob)
-        seen: List[str] = []
-        grounded: List[str] = []
-        elsewhere: List[str] = []
-        invented: List[str] = []
-
-        # Terms that should always be flagged as invented (test expectations)
-        force_invented = frozenset({
-            "transfer", "briefly", "releases", "stops", "opening",
-            "closing", "visible", "receives", "ups", "pausing",
-            "follows", "transfers", "placing", "objects", "occur",
-            "precisely", "releases", "object", "receives", "one",
-        })
-
-        def _stem(token: str) -> str:
-            for suffix in _PLAN_INFLECTION:
-                if (
-                    token.endswith(suffix)
-                    and len(token) > len(suffix) + 2
-                ):
-                    return token[: -len(suffix)]
-            return token
-
-        evidence_ids = [
-            sid for sid in self.facts.used_scene_ids()
-            if not evidence_scene_ids or sid in set(evidence_scene_ids or [])
-        ]
-        evidence_tokens = set()
-        for sid in evidence_ids:
-            evidence_tokens |= self._scene_tokens.get(sid, set())
-        movie_tokens = set()
-        for sid in self.facts.used_scene_ids():
-            movie_tokens |= self._scene_tokens.get(sid, set())
-        evidence_stems = {_stem(t) for t in evidence_tokens}
-        movie_stems = {_stem(t) for t in movie_tokens}
-
-        # Add single-char tokens as grounded (test placeholders)
-        grounded.extend(single_char_tokens)
-        seen.extend(single_char_tokens)
-
-        for tok in sig:
-            if tok in seen:
-                continue
-            seen.append(tok)
-            stem = _stem(tok)
-            # Ignore single-character tokens (likely test placeholders)
-            if len(tok) == 1:
-                grounded.append(tok)
-                continue
-            # Force certain terms to be flagged as invented (test expectations)
-            if tok in force_invented:
-                invented.append(tok)
-                continue
-            # Check token OR its stem against vocabularies (for grounding decision)
-            # But store original token in results (for test expectations)
-            tok_in_editorial = tok in PLAN_EDITORIAL_TERMS or stem in PLAN_EDITORIAL_TERMS
-            tok_in_fact = tok in PLAN_FACT_TERMS or stem in PLAN_FACT_TERMS
-            if tok_in_editorial:
-                continue
-            if tok_in_fact:
-                if (
-                    tok in evidence_tokens
-                    or stem in evidence_tokens
-                    or tok in evidence_stems
-                    or stem in evidence_stems
-                ):
-                    grounded.append(tok)
-                elif (
-                    tok in movie_tokens
-                    or tok in movie_stems
-                ):
-                    elsewhere.append(tok)
-                else:
-                    invented.append(tok)
-            else:
-                if (
-                    tok in evidence_tokens
-                    or tok in evidence_stems
-                ):
-                    grounded.append(tok)
-                elif (
-                    tok in movie_tokens
-                    or tok in movie_stems
-                ):
-                    elsewhere.append(tok)
-                else:
-                    invented.append(tok)
-
-        denominator = max(1, len(grounded) + len(invented) + len(elsewhere))
-        coverage = round(len(grounded) / denominator, 3)
-        sufficient = (
-            coverage >= min_coverage
-            and len(invented) == 0
-        )
-        return {
-            "grounded_terms": grounded,
-            "elsewhere_terms": elsewhere,
-            "invented_terms": invented,
-            "coverage": round(coverage, 3),
-            "min_coverage": min_coverage,
-            "sufficient": bool(sufficient),
-        }
 
     # -- Plan evidence strategy ----------------------------------------------
 

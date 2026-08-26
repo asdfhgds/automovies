@@ -114,7 +114,7 @@ PLAN_AUDIO_MUSIC = frozenset({
     "none", "low", "moderate", "high", "diegetic_only", "score_only",
 })
 
-#: Editorial/craft vocabulary allowed in plan ``editorial_direction`` prose.
+#: Editorial/craft vocabulary allowed in plan structured fields.
 #: These describe HOW to cut / score / frame the essay, never claims about
 #: on-screen content, so the plan auditor must not flag them as invented.
 #: Also includes common neutral process/generic verbs and abstract staging
@@ -479,27 +479,7 @@ def build_plan_prompt(
     ``grounding_warnings`` (optional) list concrete FACTUAL terms from a previous
     plan attempt that no scene actually contains — the model must not reuse them.
     """
-    # Lazy import to avoid cycles.
-    from .evidence import PLAN_EDITORIAL_TERMS
-    whitelist_blob = (
-        "\n## ALLOWED EDITORIAL VOCABULARY (whitelist)\n"
-        "The structured fields below use controlled vocabularies. If you must "
-        "write prose in any free-text field, use ONLY these terms (flat list):\n"
-        + ", ".join(sorted(PLAN_EDITORIAL_TERMS))
-        + "\n"
-    )
-    warnings_blob = ""
-    if grounding_warnings:
-        warnings_blob = (
-            "\n## GROUNDING CORRECTION (your previous plan was audited)\n"
-            "The following FACTUAL terms you used do NOT exist in any evidence "
-            "scene. Remove them and re-describe using structured fields or "
-            "verbatim vocabulary terms:\n"
-            + "\n".join(f"- {t}" for t in grounding_warnings)
-            + "\n"
-        )
-
-# Build the structured editorial plan example using the selected concept's evidence refs
+    # Build the structured editorial plan example using the selected concept's evidence refs
     example_scene_id = "scene-1"
     example_fact_refs = '["revolver", "scene-1"]'
     concept_refs_list = []
@@ -513,13 +493,6 @@ def build_plan_prompt(
         if fact_refs:
             example_fact_refs = json.dumps([r.get("value", "") for r in fact_refs])
 
-    whitelist_blob = (
-        "\n## ALLOWED EDITORIAL VOCABULARY (whitelist)\n"
-        "The structured fields below use controlled vocabularies. If you must "
-        "write prose in any free-text field, use ONLY these terms (flat list):\n"
-        + ", ".join(sorted(PLAN_EDITORIAL_TERMS))
-        + "\n"
-    )
     warnings_blob = ""
     if grounding_warnings:
         warnings_blob = (
@@ -546,7 +519,7 @@ MANDATORY STRUCTURE:
   grounded in the evidence scenes. Use verbatim identifiers from the vocabulary.
 - Editorial fields use CONTROLLED VOCABULARIES (see below) and do NOT require
   movie grounding.
-- If you need free-text prose, use ONLY the ALLOWED EDITORIAL VOCABULARY.
+- DO NOT write free-text prose. All editorial decisions go in the structured fields.
 
 CONTROLLED VOCABULARIES (editorial fields — no movie grounding needed):
 - transition: {", ".join(sorted(PLAN_TRANSITIONS))}
@@ -559,7 +532,6 @@ CONTROLLED VOCABULARIES (editorial fields — no movie grounding needed):
 - narration: {", ".join(sorted(PLAN_AUDIO_NARRATION))}
 - music: {", ".join(sorted(PLAN_AUDIO_MUSIC))}
 
-{whitelist_blob}
 {warnings_blob}
 Return ONLY valid JSON (no markdown, no code fences) with this structure:
 {{
@@ -592,18 +564,11 @@ Return ONLY valid JSON (no markdown, no code fences) with this structure:
       "narration": "dominant",
       "music": "low"
     }}
-  }},
-  "editorial_direction": {{
-    "pacing": "fallback prose if needed",
-    "visual_style": "fallback prose if needed",
-    "audio_style": "fallback prose if needed",
-    "editing_style": "fallback prose if needed"
   }}
 }}
 
 The evidence_strategy is computed deterministically from the scenes by the
-system, so you only provide concept (copied) / format / editorial_plan /
-editorial_direction (prose fallback).
+system, so you only provide concept (copied) / format / editorial_plan.
 Base every FACTUAL claim on the evidence scenes shown. Do not invent
 characters, objects, locations, or moments.
 
@@ -739,29 +704,24 @@ def _normalize_concept(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def parse_plan(response_text: str) -> Optional[Dict[str, Any]]:
-    """Parse the final plan response (supports both V4 structured and legacy format)."""
+    """Parse the final plan response (V4 structured format only)."""
     data = extract_json(response_text)
     if not isinstance(data, dict):
         return None
     concept = data.get("concept")
-    # V4: structured editorial_plan (primary)
+    # V4: structured editorial_plan (required)
     editorial_plan = data.get("editorial_plan")
-    # Legacy: free-text editorial_direction (backward compat)
-    ed = data.get("editorial_direction")
     fmt = data.get("format") or {}
     if not isinstance(concept, dict):
         return None
-    # At least one of editorial_plan or editorial_direction must be present
-    if not isinstance(ed, dict) and not isinstance(editorial_plan, dict):
+    # editorial_plan is now required
+    if not isinstance(editorial_plan, dict):
         return None
     result = {
         "concept": dict(concept),
         "format": dict(fmt) if isinstance(fmt, dict) else {},
+        "editorial_plan": dict(editorial_plan),
     }
-    if isinstance(editorial_plan, dict):
-        result["editorial_plan"] = dict(editorial_plan)
-    if isinstance(ed, dict):
-        result["editorial_direction"] = dict(ed)
     return result
 
 

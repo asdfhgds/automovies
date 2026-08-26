@@ -11,7 +11,7 @@ model behavior that must be proven:
 
 - ``grounded``          — every concept carries verbatim, resolvable vocabulary
                           (object + confident location); the plan's
-                          ``editorial_direction`` also stays inside the evidence
+                          ``editorial_plan`` also stays inside the evidence
                           scene's facts. Verdict must be PASS.
 - ``hallucinated``      — concepts name objects/locations/characters that do
                           NOT exist in the movie. The gate must reject them; the
@@ -31,7 +31,7 @@ model behavior that must be proven:
 - ``none``              — every candidate fails (even after regeneration);
                           selected concept is None, plan is None, verdict FAIL.
 - ``plan_rejected``     — a grounded concept is selected but the plan's
-                          editorial_direction invents unsupported content; the
+                          editorial_plan invents unsupported content; the
                           strict plan gate records the rejection (verdict FAIL,
                           plan_rejection present).
 
@@ -281,5 +281,25 @@ class MockValidationLLM:
         return {
             "concept": {"title": "t", "hook": "h", "thesis": "s"},
             "format": {"type": "short_video_essay", "duration_sec": 90},
-            "editorial_direction": ed,
+            "editorial_plan": {
+                "visual": {
+                    "scene_id": "scene-1",
+                    "start_sec": 1.0,
+                    "end_sec": 3.0,
+                    "source_fact_refs": []
+                },
+                "editing": {
+                    "transition": "cut",
+                    "pacing": "steady",
+                    "rhythm": "steady",
+                    "emphasis": "character",
+                    "repetition": "none",
+                    "purpose": "contrast"
+                },
+                "audio": {
+                    "movie_audio": "retain",
+                    "narration": "moderate",
+                    "music": "low"
+                }
+            },
         }

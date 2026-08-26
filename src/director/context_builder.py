@@ -397,33 +397,29 @@ class DirectorContextBuilder:
             f"- Moods: {', '.join(ev_moods) or '(none identified)'}"
         )
 
-        # A worked, already-grounded editorial_direction example (deterministic)
-        # so the model sees the only acceptable object/mood vocabulary.
-        example_ref_lines = []
-        for sf in selected:
-            objs = [o for o in sf.objects if str(o).strip()]
-            mood = sf.mood if str(sf.mood or "").strip() else (
-                sf.themes[0] if sf.themes else "")
-            if not objs or not mood:
-                continue
-            example_ref_lines.append(
-                f"- Scene {sf.scene_id}: hold the \"{objs[0]}\" and the "
-                f"\"{mood}\" mood."
-            )
-            break
-        worked_example = ""
-        if example_ref_lines:
-            worked_example = (
-                "## WORKED EDITORIAL EXAMPLE (ALREADY GROUNDED — imitate the "
-                "restraint, write your own words, stay inside the whitelist)\n"
-                + "\n".join(example_ref_lines)
-                + "\n"
-                "Pacing: slow and measured.\n"
-                "Visual style: minimal, grounded in the scenes above and "
-                "their stillness.\n"
-                "Audio style: quiet; silence and sparse sound.\n"
-                "Editing style: long takes and steady cuts, soft focus.\n"
-            )
+        # A worked, already-grounded editorial_plan example (deterministic)
+        # so the model sees the structured format and controlled vocabularies.
+        worked_example = (
+            "## WORKED EDITORIAL PLAN EXAMPLE (ALREADY GROUNDED — imitate the "
+            "structure, stay inside the controlled vocabularies)\n"
+            "editorial_plan:\n"
+            "  visual:\n"
+            "    scene_id: scene-1\n"
+            "    start_sec: 1.2\n"
+            "    end_sec: 3.8\n"
+            "    source_fact_refs: [\"revolver\", \"scene-1\"]\n"
+            "  editing:\n"
+            "    transition: cut\n"
+            "    pacing: gradual\n"
+            "    rhythm: steady\n"
+            "    emphasis: character\n"
+            "    repetition: none\n"
+            "    purpose: contrast\n"
+            "  audio:\n"
+            "    movie_audio: retain\n"
+            "    narration: dominant\n"
+            "    music: low\n"
+        )
 
         return (
             f"## SELECTED CONCEPT\n"

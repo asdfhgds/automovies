@@ -23,7 +23,7 @@ class GroundedMockLLM:
 
     def __call__(self, prompt: str) -> str:
         self.calls.append(prompt)
-        if "finalizing the plan" in prompt:
+if "finalizing the plan" in prompt:
             return json.dumps({
                 "concept": {
                     "title": self._concepts[0]["title"] if self._concepts else "Grounded Concept",
@@ -31,11 +31,26 @@ class GroundedMockLLM:
                     "thesis": self._concepts[0]["thesis"] if self._concepts else "",
                 },
                 "format": {"type": "short_video_essay", "duration_sec": 90},
-                "editorial_direction": {
-                    "pacing": "measured, builds toward the reveal",
-                    "visual_style": "grounded close-ups of the evidence scenes",
-                    "audio_style": "restrained score under narration",
-                    "editing_style": "cut to the excerpt when the claim lands",
+                "editorial_plan": {
+                    "visual": {
+                        "scene_id": "scene-1",
+                        "start_sec": 1.2,
+                        "end_sec": 3.8,
+                        "source_fact_refs": []
+                    },
+                    "editing": {
+                        "transition": "cut",
+                        "pacing": "gradual",
+                        "rhythm": "steady",
+                        "emphasis": "character",
+                        "repetition": "none",
+                        "purpose": "contrast"
+                    },
+                    "audio": {
+                        "movie_audio": "retain",
+                        "narration": "dominant",
+                        "music": "low"
+                    }
                 },
             })
         if self._concepts:
