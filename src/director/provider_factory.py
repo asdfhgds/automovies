@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from utils.strict import strict_mode_enabled, require_cuda
+from ..utils.strict import strict_mode_enabled, require_cuda
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def get_llm_provider_from_config(config: Dict[str, Any]):
         if strict:
             raise RuntimeError("REQUIRE_REAL_LLM=true forbids the mock LLM provider.")
         try:
-            from director.providers.mock_llm import MockLLMProvider
+            from .providers.mock_llm import MockLLMProvider
             logger.info("Using MockLLMProvider")
             return MockLLMProvider()
         except ImportError as e:
@@ -52,7 +52,7 @@ def get_llm_provider_from_config(config: Dict[str, Any]):
 
     elif provider_name == "qwen":
         try:
-            from director.providers.qwen import QwenProvider
+            from .providers.qwen import QwenProvider
 
             # Extract Qwen-specific config
             model = config.get("model", "Qwen/Qwen3-4B-Instruct-2507")
@@ -102,7 +102,7 @@ def get_llm_provider_from_config(config: Dict[str, Any]):
                     f"REQUIRE_REAL_LLM=true but Qwen dependencies are missing: {e}"
                 ) from e
             try:
-                from director.providers.mock_llm import MockLLMProvider
+                from .providers.mock_llm import MockLLMProvider
                 logger.info("Falling back to MockLLMProvider")
                 return MockLLMProvider()
             except ImportError:

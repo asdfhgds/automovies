@@ -26,7 +26,7 @@ Matching contract (deterministic, no LLM):
 import re
 from typing import Dict, Any, List, Optional, Iterable
 
-from director.concepts import (
+from .concepts import (
     concept_refs,
     render_ref,
     PLAN_EDITORIAL_TERMS,
@@ -40,7 +40,7 @@ from director.concepts import (
     PLAN_AUDIO_NARRATION,
     PLAN_AUDIO_MUSIC,
 )
-from director.scene_facts import (
+from .scene_facts import (
     SceneFacts,
     normalize_entity,
     significant_tokens,
@@ -1303,7 +1303,7 @@ class EvidenceAnalyzer:
         - claim_id, text, type, support (scene_ids + matched facts),
           status (SUPPORTED/PARTIAL/UNKNOWN/UNSUPPORTED), confidence, missing.
         """
-        from director.concepts import CLAIM_TYPES
+        from .concepts import CLAIM_TYPES
         prose = " ".join(str(concept.get(k) or "") for k in ("title", "hook", "thesis"))
         claims = []
 

@@ -480,7 +480,7 @@ def build_plan_prompt(
     plan attempt that no scene actually contains — the model must not reuse them.
     """
     # Lazy import to avoid cycles.
-    from director.evidence import PLAN_EDITORIAL_TERMS
+    from .evidence import PLAN_EDITORIAL_TERMS
     whitelist_blob = (
         "\n## ALLOWED EDITORIAL VOCABULARY (whitelist)\n"
         "The structured fields below use controlled vocabularies. If you must "
@@ -504,7 +504,7 @@ def build_plan_prompt(
     example_fact_refs = '["revolver", "scene-1"]'
     concept_refs_list = []
     if selected_concept:
-        from director.concepts import concept_refs
+        from .concepts import concept_refs
         concept_refs_list = concept_refs(selected_concept)
         scene_refs = [r for r in concept_refs_list if r.get("kind") == "scene"]
         if scene_refs:

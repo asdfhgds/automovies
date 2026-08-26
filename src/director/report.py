@@ -8,8 +8,8 @@ won. Nothing is hidden behind the model's answer.
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from director.evidence import EvidenceAnalyzer
-from director.concepts import render_ref
+from .evidence import EvidenceAnalyzer
+from .concepts import render_ref
 
 
 def _line(label, value, indent="  "):

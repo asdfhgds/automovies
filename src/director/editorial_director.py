@@ -414,7 +414,7 @@ class EditorialDirector:
         else:
             return {"type": "medium", "reason": "standard coverage"}
     
-def _build_pacing(self, editing_plan: Dict[str, Any], clip_duration: float = 3.0) -> Dict[str, Any]:
+    def _build_pacing(self, editing_plan: Dict[str, Any], clip_duration: float = 3.0) -> Dict[str, Any]:
         """Build pacing config from editorial plan, respecting clip duration."""
         pacing = {}
         if "pacing" in editing_plan:
@@ -430,9 +430,10 @@ def _build_pacing(self, editing_plan: Dict[str, Any], clip_duration: float = 3.0
         pacing.setdefault("rhythm", "measured")
         # Use clip duration as hint, but cap segment duration to a reasonable max
         pacing.setdefault("duration_hint_sec", min(clip_duration, 5.0))
-return pacing
+        return pacing
 
-
+    def _build_audio_strategy(
+        self,
         audio_plan: Dict[str, Any],
         movie_audio: str = "retain",
         narration: str = "dominant",
@@ -518,114 +519,7 @@ def generate_editorial_decisions(
     """
     import json
     from pathlib import Path
-    
-    # Load inputs
-    with open(grounded_script_path, 'r', encoding='utf-8') as f:
-        grounded_script = json.load(f)
-    
-    with open(grounding_contract_path, 'r', encoding='utf-8') as f:
-        grounding_contract = json.load(f)
-    
-    with open(editorial_plan_path, 'r', encoding='utf-8') as f:
-        editorial_plan = json.load(f)
-    
-    # Create editorial director
-    director = EditorialDirector()
-    
-    # Generate editorial decisions
-    edl = {
-        "concept_title": "",
-        "concept_thesis": "",
-        "segments": [],
-        "metadata": {
-            "project_id": "",
-            "movie_title": "",
-            "grounding_contract_path": str(Path(grounding_contract_path).name),
-            "editorial_plan_path": str(Path(editorial_plan_path).name),
-            "grounded_script_path": str(Path(grounded_script_path).name),
-            "created_at": datetime.utcnow().isoformat() + "Z",
-        }
-    }
-    
-    # Build editorial decisions
-    director = EditorialDirector()
-    edl = director.create_editorial_plan(
-        grounded_script={"sections": []},  # would load from file
-        grounding_contract={"supporting_scenes": [], "evidence_refs": []},
-        editorial_plan={"visual": {}, "editing": {}, "audio": {}},
-    )
-    
-    # Write output
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(edl, f, indent=2, ensure_ascii=False)
-    
-    return output_path
-
-
-# --- Validation Utilities -----------------------------------------------------
-
-def validate_editorial_decision_list(
-    edl: Dict[str, Any],
-    grounding_contract: Dict[str, Any],
-    grounded_script: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Validate an Editorial Decision List against the grounding contract and script."""
-    errors = []
-    warnings = []
-    
-    # Check each segment references valid evidence
-    for segment in edl.get("segments", []):
-        for ev in segment.get("evidence", []):
-            scene_id = ev.get("scene_id")
-            # Could validate against grounding contract here
-            pass
-    
-    # Check for repeated excerpts
-    excerpt_windows = set()
-    for segment in edl.get("segments", []):
-        for ev in segment.get("evidence", []):
-            key = (ev.get("scene_id"), ev.get("start_sec"), ev.get("end_sec"))
-            if key in excerpt_windows:
-                warnings.append(f"Repeated excerpt: {key}")
-            excerpt_windows.add(key)
-    
-    # Check for repeated footage
-    # Check timestamp validity
-    # Check visual strategy has required fields
-    # Check audio fields are valid enums
-    # Check editing fields are valid enums
-    
-    return {
-        "valid": len(errors) == 0,
-        "errors": errors,
-        "warnings": warnings,
-    }
-
-
-# --- Main Entry Point ---------------------------------------------------------
-
-def generate_editorial_decisions(
-    grounded_script_path: Path,
-    grounding_contract_path: Path,
-    editorial_plan_path: Path,
-    output_path: Path,
-    scene_facts=None,
-) -> Path:
-    """Main entry point: generate Editorial Decision List from grounded script and plan.
-    
-    Args:
-        grounded_script_path: Path to grounded script JSON
-        grounding_contract_path: Path to grounding_contract.json
-        editorial_plan_path: Path to editorial_plan.json (from V4)
-        output_path: Where to save the Editorial Decision List JSON
-        scene_facts: Optional SceneFacts for validation
-        
-    Returns:
-        Path to the generated Editorial Decision List JSON file.
-    """
-    import json
-    from pathlib import Path
+    from datetime import datetime
     
     # Load inputs
     with open(grounded_script_path, 'r', encoding='utf-8') as f:
@@ -642,10 +536,20 @@ def generate_editorial_decisions(
     
     # Generate editorial decisions
     edl = director.create_editorial_plan(
-        grounded_script={},  # would load from file
-        grounding_contract={},  # would load from file
-        editorial_plan={},  # would load from file
+        grounded_script=grounded_script,
+        grounding_contract=grounding_contract,
+        editorial_plan=editorial_plan,
     )
+    
+    # Add metadata
+    edl["metadata"] = {
+        "project_id": "",
+        "movie_title": "",
+        "grounding_contract_path": str(Path(grounding_contract_path).name),
+        "editorial_plan_path": str(Path(editorial_plan_path).name),
+        "grounded_script_path": str(Path(grounded_script_path).name),
+        "created_at": datetime.utcnow().isoformat() + "Z",
+    }
     
     # Write output
     output_path.parent.mkdir(parents=True, exist_ok=True)

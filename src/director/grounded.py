@@ -37,7 +37,7 @@ import logging
 from pathlib import Path
 from typing import Callable, Dict, Any, List, Optional
 
-from director.concepts import (
+from .concepts import (
     build_generation_prompt,
     build_rejection_prompt,
     build_plan_prompt,
@@ -47,12 +47,12 @@ from director.concepts import (
     compute_diversity_metric,
     render_ref,
 )
-from director.context_builder import DirectorContextBuilder
-from director.critic import ConceptCritic
-from director.evidence import EvidenceAnalyzer
-from director.memory import CreativeMemory
-from director.report import build_report, write_report
-from director.scene_facts import SceneFacts
+from .context_builder import DirectorContextBuilder
+from .critic import ConceptCritic
+from .evidence import EvidenceAnalyzer
+from .memory import CreativeMemory
+from .report import build_report, write_report
+from .scene_facts import SceneFacts
 
 logger = logging.getLogger(__name__)
 

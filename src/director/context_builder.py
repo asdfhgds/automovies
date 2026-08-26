@@ -17,8 +17,8 @@ Both are deterministic. No LLM calls happen here.
 import json
 from typing import Dict, Any, List, Optional, Tuple
 
-from director.concepts import concept_refs, render_ref
-from director.scene_facts import SceneFacts, _as_list
+from .concepts import concept_refs, render_ref
+from .scene_facts import SceneFacts, _as_list
 
 
 def _fmt_ts(value) -> str:

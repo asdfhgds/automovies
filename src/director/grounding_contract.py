@@ -10,7 +10,7 @@ produces, so no duplicate formats appear.
 from pathlib import Path
 from typing import Any, Dict, List
 
-from director.scene_facts import SceneFacts
+from .scene_facts import SceneFacts
 from movie_understanding import movie_memory
 
 # Keys every well-formed contract carries. Downstream stages (script generator,

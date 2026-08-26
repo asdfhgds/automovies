@@ -42,8 +42,8 @@ so determinism matches the deterministic matcher.
 import json
 from typing import Any, Dict, List, Optional
 
-from director.evidence import EvidenceAnalyzer
-from director.scene_facts import SceneFacts
+from .evidence import EvidenceAnalyzer
+from .scene_facts import SceneFacts
 
 # Tokens that never appear in the real movie facts (verified for bc6384be).
 ABSENT = {
