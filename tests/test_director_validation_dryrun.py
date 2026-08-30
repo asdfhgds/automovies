@@ -142,10 +142,9 @@ class TestCaseAValidGrounded:
         refs = sel.get("evidence_refs") or []
         assert any(r.get("kind") == "object" for r in refs)
         assert any(r.get("kind") == "scene" for r in refs)
-        # The plan's editorial_direction is inside the evidence scenes.
+        # The plan's editorial_plan is validated by V4 fact + editorial validators.
         audit = data["plan"].get("grounding_audit") or {}
-        assert audit.get("sufficient") is True
-        assert audit.get("invented_terms") == []
+        assert audit.get("overall_valid") is True
         assert "SELECTED CONCEPT" in md
         assert "Director Reasoning Report" in md
 
@@ -301,9 +300,9 @@ class TestCaseFNoValidConcepts:
 
 class TestPlanGateAndVerdict:
     def test_plan_rejected_records_rejection(self, dryrun_project):
-        """A grounded concept whose plan editorial invents content ('flying
-        saucer', 'chairs') is rejected by the STRICT PLAN GATE: plan stays
-        None, plan_rejection is recorded, verdict is PLAN_REJECTED."""
+        """A grounded concept whose plan editorial invents content is rejected
+        by the STRICT PLAN GATE: plan stays None, plan_rejection is recorded,
+        verdict is PLAN_REJECTED."""
         data, md = _run_harness(dryrun_project, "plan_rejected")
         assert data["verdict"] == "PLAN_REJECTED"
         assert data["selected_concept"] is not None
@@ -312,8 +311,7 @@ class TestPlanGateAndVerdict:
         assert rejection is not None
         assert rejection["reason"]
         audit = rejection["audit"]
-        assert audit["sufficient"] is False
-        assert "flying saucer" in " ".join(audit["invented_terms"])
+        assert audit["overall_valid"] is False
         assert "PLAN REJECTED" in md
 
     def test_verdict_never_pass_on_insufficient_grounding(self, dryrun_project):

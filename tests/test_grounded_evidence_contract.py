@@ -755,12 +755,14 @@ class TestBoundedRegeneration:
                         },
                         "format": {"type": "short_video_essay",
                                    "duration_sec": 90},
-                        "editorial_direction": {
-                            "pacing": "slow",
-                            "visual_style": "close-up on the revolver while "
-                                            "the barman talks",
-                            "audio_style": "minimal",
-                            "editing_style": "quiet cuts",
+                        "editorial_plan": {
+                            "visual": {"scene_id": "scene-1", "start_sec": 1.0,
+                                       "end_sec": 5.0, "source_fact_refs": []},
+                            "editing": {"transition": "cut", "pacing": "slow",
+                                        "rhythm": "steady", "emphasis": "character",
+                                        "repetition": "none", "purpose": "contrast"},
+                            "audio": {"movie_audio": "retain", "narration": "moderate",
+                                      "music": "low"},
                         },
                     })
                 return json.dumps({"concepts": [{

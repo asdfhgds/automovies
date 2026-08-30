@@ -256,27 +256,24 @@ class MockValidationLLM:
         loc = story.get("location") or ""
         obj = objs[0] if objs else "the frame"
         if self.plan_direction_stays_grounded:
-            # Only tokens that are either PLAN_EDITORIAL_TERMS or verbatim
-            # vocabulary of the evidence scene (so the deterministic audit
-            # scores grounded coverage high and no invented terms).
-            ed = {
-                "pacing": "slow measured pacing, quiet and minimal",
-                "visual_style": (
-                    f"slow zooms and quiet cuts holding on the {obj} inside "
-                    f"the {loc}"
-                ),
-                "audio_style": "minimal sound, sparse and still",
-                "editing_style": "quiet cuts and slow transitions",
+            # Valid V4 editorial_plan with enums from controlled vocabularies.
+            editing = {
+                "transition": "cut",
+                "pacing": "steady",
+                "rhythm": "steady",
+                "emphasis": "character",
+                "repetition": "none",
+                "purpose": "contrast",
             }
         else:
-            ed = {
-                "pacing": "frenetic",
-                "visual_style": (
-                    f"empty chairs, an open window and a flying saucer parked "
-                    f"outside the {loc}"
-                ),
-                "audio_style": "noise",
-                "editing_style": "crash zooms",
+            # Invalid editorial enums that fail the V4 editorial schema validator.
+            editing = {
+                "transition": "INVALID_TRANSITION",
+                "pacing": "INVALID_PACING",
+                "rhythm": "steady",
+                "emphasis": "character",
+                "repetition": "none",
+                "purpose": "contrast",
             }
         return {
             "concept": {"title": "t", "hook": "h", "thesis": "s"},
@@ -288,14 +285,7 @@ class MockValidationLLM:
                     "end_sec": 3.0,
                     "source_fact_refs": []
                 },
-                "editing": {
-                    "transition": "cut",
-                    "pacing": "steady",
-                    "rhythm": "steady",
-                    "emphasis": "character",
-                    "repetition": "none",
-                    "purpose": "contrast"
-                },
+                "editing": editing,
                 "audio": {
                     "movie_audio": "retain",
                     "narration": "moderate",

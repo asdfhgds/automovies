@@ -165,10 +165,15 @@ def test_contract_built_from_director_result(movie_index):
                 return json.dumps({
                     "concept": {"title": "T", "hook": "H", "thesis": "The revolver stages the choice."},
                     "format": {"type": "short_video_essay", "duration_sec": 90},
-"editorial_direction": {"pacing": "measured",
-                            "visual_style": "close shot on the revolver and "
-                                            "the bar",
-                            "audio_style": "a", "editing_style": "e"},
+                    "editorial_plan": {
+                        "visual": {"scene_id": "scene-1", "start_sec": 1.0,
+                                   "end_sec": 5.0, "source_fact_refs": ["revolver"]},
+                        "editing": {"transition": "cut", "pacing": "measured",
+                                    "rhythm": "steady", "emphasis": "object",
+                                    "repetition": "none", "purpose": "emphasis"},
+                        "audio": {"movie_audio": "retain", "narration": "moderate",
+                                  "music": "low"},
+                    },
                 })
             return json.dumps({"concepts": [
                 {

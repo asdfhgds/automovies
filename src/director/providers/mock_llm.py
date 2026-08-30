@@ -23,7 +23,7 @@ class GroundedMockLLM:
 
     def __call__(self, prompt: str) -> str:
         self.calls.append(prompt)
-if "finalizing the plan" in prompt:
+        if "finalizing the plan" in prompt:
             return json.dumps({
                 "concept": {
                     "title": self._concepts[0]["title"] if self._concepts else "Grounded Concept",

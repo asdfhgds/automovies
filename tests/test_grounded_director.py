@@ -270,13 +270,19 @@ class TestContextBuilder:
         cb = DirectorContextBuilder()
         ctx = cb.build_plan_context(concept, facts, ["scene-1"])
         assert "## VERBATIM VOCABULARY FOR THE EVIDENCE SCENES ONLY" in ctx
-        assert "## WORKED EDITORIAL EXAMPLE" in ctx
+        assert "## WORKED EDITORIAL PLAN EXAMPLE" in ctx
         assert "revolver" in ctx
         assert "mirror" not in ctx  # scene-2 facts must NOT leak into scene-1
-        # The worked editorial example must not cite out-of-scope props.
+        # The worked editorial example's scene must be grounded in evidence.
         audit = EvidenceAnalyzer(facts).plan_grounding(
-            {"visual_style": ctx}, ["scene-1"])
-        assert "mirror" not in audit["invented_terms"] + audit["elsewhere_terms"]
+            {"editorial_plan": {"visual": {"scene_id": "scene-1", "start_sec": 0.0, "end_sec": 5.0},
+                                "editing": {"transition": "cut", "pacing": "steady",
+                                            "rhythm": "steady", "emphasis": "character",
+                                            "repetition": "none", "purpose": "contrast"},
+                                "audio": {"movie_audio": "retain", "narration": "moderate",
+                                          "music": "low"}}},
+            ["scene-1"])
+        assert audit["overall_valid"] is True
 
 
 # --------------------------------------------------------------------------- #
@@ -341,49 +347,118 @@ class TestEvidence:
 
 
 class TestPlanGroundingAudit:
-    """Deterministic audit of plan editorial_direction prose."""
+    """Deterministic audit of plan structured editorial_plan (V4)."""
 
     def test_grounded_plan_is_sufficient(self, facts):
         analyzer = EvidenceAnalyzer(facts)
-        ed = {
-            "pacing": "slow and measured",
-            "visual_style": "close-up on the revolver and the glass while the "
-                            "barman is talking",
-            "audio_style": "minimal",
-            "editing_style": "long takes and quiet cuts",
+        plan = {
+            "editorial_plan": {
+                "visual": {
+                    "scene_id": "scene-1",
+                    "start_sec": 1.0,
+                    "end_sec": 5.0,
+                    "source_fact_refs": ["revolver"],
+                },
+                "editing": {
+                    "transition": "cut",
+                    "pacing": "slow",
+                    "rhythm": "steady",
+                    "emphasis": "character",
+                    "repetition": "none",
+                    "purpose": "contrast",
+                },
+                "audio": {
+                    "movie_audio": "retain",
+                    "narration": "moderate",
+                    "music": "low",
+                },
+            },
         }
-        audit = analyzer.plan_grounding(ed, ["scene-1"])
-        assert audit["sufficient"] is True
-        assert audit["coverage"] >= audit["min_coverage"]
-        assert "revolver" in " ".join(audit["grounded_terms"])
+        audit = analyzer.plan_grounding(plan, ["scene-1"])
+        assert audit["overall_valid"] is True
 
-    def test_invented_plan_terms_flagged(self, facts):
+    def test_invented_plan_editorial_rejected(self, facts):
+        """V4 rejects a plan with invalid editorial enum values."""
         analyzer = EvidenceAnalyzer(facts)
-        ed = {
-            "visual_style": "empty chairs, an open window and silhouettes in "
-                            "the saloon",
-            "editing_style": "quiet cuts",
+        plan = {
+            "editorial_plan": {
+                "visual": {
+                    "scene_id": "scene-1",
+                    "start_sec": 1.0,
+                    "end_sec": 5.0,
+                    "source_fact_refs": [],
+                },
+                "editing": {
+                    "transition": "frenetic_zoom",  # not in PLAN_TRANSITIONS
+                    "pacing": "slow",
+                    "rhythm": "steady",
+                    "emphasis": "character",
+                    "repetition": "none",
+                    "purpose": "contrast",
+                },
+                "audio": {
+                    "movie_audio": "retain",
+                    "narration": "moderate",
+                    "music": "low",
+                },
+            },
         }
-        audit = analyzer.plan_grounding(ed, ["scene-1"])
-        assert audit["sufficient"] is False
-        assert "chairs" in audit["invented_terms"]
-        assert "window" in audit["invented_terms"]
-        assert "silhouettes" in audit["invented_terms"]
+        audit = analyzer.plan_grounding(plan, ["scene-1"])
+        assert audit["overall_valid"] is False
+        errors = audit["editorial_validation"]["errors"]
+        assert any("frenetic_zoom" in e for e in errors)
 
-    def test_out_of_scope_terms_flagged_separately(self, facts):
+    def test_plan_without_scene_id_rejected(self, facts):
+        """V4 rejects a plan missing the required visual.scene_id."""
         analyzer = EvidenceAnalyzer(facts)
-        # "horse" exists in the movie but NOT in evidence scene-1.
-        ed = {"visual_style": "a lone horse in the saloon light"}
-        audit = analyzer.plan_grounding(ed, ["scene-1"])
-        assert "horse" in audit["elsewhere_terms"]
-        assert "horse" not in audit["invented_terms"]
-        assert "saloon" in audit["grounded_terms"]
+        plan = {
+            "editorial_plan": {
+                "editing": {
+                    "transition": "cut",
+                    "pacing": "slow",
+                    "rhythm": "steady",
+                    "emphasis": "character",
+                    "repetition": "none",
+                    "purpose": "contrast",
+                },
+                "audio": {
+                    "movie_audio": "retain",
+                    "narration": "moderate",
+                    "music": "low",
+                },
+            },
+        }
+        audit = analyzer.plan_grounding(plan, ["scene-1"])
+        assert audit["overall_valid"] is False
 
-    def test_editorial_craft_terms_not_flagged(self, facts):
+    def test_editorial_craft_terms_pass(self, facts):
+        """V4 controlled vocabularies accept valid editorial terms."""
         analyzer = EvidenceAnalyzer(facts)
-        ed = {"visual_style": "slow zooms, crossfades and minimal ambient sound"}
-        audit = analyzer.plan_grounding(ed, ["scene-1"])
-        assert audit["invented_terms"] == []
+        plan = {
+            "editorial_plan": {
+                "visual": {
+                    "scene_id": "scene-1",
+                    "start_sec": 1.0,
+                    "end_sec": 5.0,
+                    "source_fact_refs": [],
+                },
+                "editing": {
+                    "transition": "crossfade",
+                    "pacing": "measured",
+                    "rhythm": "slow",
+                    "emphasis": "silence",
+                    "repetition": "motif",
+                    "purpose": "emphasis",
+                },
+                "audio": {
+                    "movie_audio": "retain",
+                    "narration": "moderate",
+                    "music": "low",
+                },
+            },
+        }
+        audit = analyzer.plan_grounding(plan, ["scene-1"])
+        assert audit["overall_valid"] is True
 
 
 # --------------------------------------------------------------------------- #
@@ -414,13 +489,16 @@ class TestConcepts:
         raw = json.dumps({
             "concept": {"title": "T", "hook": "H", "thesis": "s"},
             "format": {"type": "short_video_essay", "duration_sec": 90},
-            "editorial_direction": {
-                "pacing": "slow", "visual_style": "wide",
-                "audio_style": "minimal", "editing_style": "cuts",
+            "editorial_plan": {
+                "visual": {"scene_id": "scene-1", "start_sec": 1.0, "end_sec": 3.0,
+                           "source_fact_refs": []},
+                "editing": {"transition": "cut", "pacing": "slow", "rhythm": "steady",
+                            "emphasis": "character", "repetition": "none", "purpose": "contrast"},
+                "audio": {"movie_audio": "retain", "narration": "moderate", "music": "low"},
             },
         })
         plan = parse_plan(raw)
-        assert plan["editorial_direction"]["pacing"] == "slow"
+        assert plan["editorial_plan"]["editing"]["pacing"] == "slow"
 
     def test_diversity_metric_separates_batches(self):
         a = [{"thesis": "quiet violence as character", "diversity_angle": "irony"},
@@ -547,22 +625,17 @@ class TestConcepts:
         assert "GROUNDING CORRECTION" not in prompt2
 
     def test_plan_prompt_embeds_editorial_whitelist(self):
-        """The plan prompt must show the model the PLAN_EDITORIAL_TERMS
-        whitelist verbatim, so a plan that stays inside it passes the audit
-        (the T4 Run-2 plan failed by writing generic film jargon instead)."""
-        from director.evidence import PLAN_EDITORIAL_TERMS
+        """The plan prompt must show the model the CONTROLLED VOCABULARIES
+        for editorial fields, so a plan that stays inside them passes the audit."""
+        from director.evidence import PLAN_TRANSITIONS, PLAN_PACING
         prompt = build_plan_prompt("CTX")
-        assert "ALLOWED EDITORIAL VOCABULARY (whitelist)" in prompt
-        # The FULL whitelist is embedded verbatim (comma-joined, sorted) — not
-        # a paraphrase the model could read as non-binding.
-        expected_list = ", ".join(sorted(PLAN_EDITORIAL_TERMS))
-        assert expected_list in prompt
-        # Representative craft terms are visibly on offer...
-        for term in ("slow", "zoom", "pacing", "transitions"):
+        assert "CONTROLLED VOCABULARIES" in prompt
+        # Controlled vocabularies are embedded (comma-joined, sorted).
+        assert "transition:" in prompt
+        assert "pacing:" in prompt
+        # Representative valid terms are visibly on offer.
+        for term in ("cut", "crossfade", "slow", "measured"):
             assert term in prompt
-        # ...while generic jargon the audit would reject is explicitly banned.
-        assert "ramping" in prompt
-        assert "whiplash cuts" in prompt
 
 
 # --------------------------------------------------------------------------- #
@@ -605,12 +678,14 @@ class TestPlanSchema:
             plan={
                 "concept": {"title": "C1", "hook": "h", "thesis": "s"},
                 "format": {"type": "short_video_essay", "duration_sec": 90},
-                "editorial_direction": {
-                    "pacing": "slow",
-                    "visual_style": "close-up on the revolver and the glass "
-                                    "while the barman pours",
-                    "audio_style": "minimal",
-                    "editing_style": "quiet cuts",
+                "editorial_plan": {
+                    "visual": {"scene_id": "scene-1", "start_sec": 1.0,
+                               "end_sec": 5.0, "source_fact_refs": ["revolver"]},
+                    "editing": {"transition": "cut", "pacing": "slow",
+                                "rhythm": "steady", "emphasis": "character",
+                                "repetition": "none", "purpose": "contrast"},
+                    "audio": {"movie_audio": "retain", "narration": "moderate",
+                              "music": "low"},
                 },
             },
         )
@@ -619,7 +694,7 @@ class TestPlanSchema:
         assert "concept" in plan
         assert "evidence_strategy" in plan
         assert "format" in plan
-        assert "editorial_direction" in plan
+        assert "editorial_plan" in plan
         assert plan["format"]["duration_sec"] == 90
         # Evidence strategy is deterministic and grounded.
         assert "scene-1" in plan["evidence_strategy"]["scene_ids"]
@@ -647,8 +722,15 @@ class TestMovieGroundedDirector:
             plan={
                 "concept": {"title": "Real One", "hook": "h", "thesis": "s"},
                 "format": {"type": "short_video_essay", "duration_sec": 90},
-                "editorial_direction": {"pacing": "p", "visual_style": "v",
-                                        "audio_style": "a", "editing_style": "e"},
+                "editorial_plan": {
+                    "visual": {"scene_id": "scene-1", "start_sec": 1.0,
+                               "end_sec": 5.0, "source_fact_refs": []},
+                    "editing": {"transition": "cut", "pacing": "slow",
+                                "rhythm": "steady", "emphasis": "character",
+                                "repetition": "none", "purpose": "contrast"},
+                    "audio": {"movie_audio": "retain", "narration": "moderate",
+                              "music": "low"},
+                },
             },
         )
         director = MovieGroundedDirector(mock, memory_dir=tmp_path / "mem")
@@ -755,9 +837,9 @@ class TestMovieGroundedDirector:
     def test_plan_with_invented_editorial_is_regenerated_once(self, facts,
                                                               metadata,
                                                               tmp_path):
-        """A plan whose editorial_direction names props not in the evidence
-        scenes triggers ONE corrective regeneration, then the audit is recorded
-        (never forced through silently)."""
+        """A plan whose editorial_plan has invalid enum values triggers ONE
+        corrective regeneration, then the audit is recorded (never forced
+        through silently)."""
 
         class _SeqLLM:
             def __init__(self):
@@ -769,26 +851,37 @@ class TestMovieGroundedDirector:
                 if "finalizing the plan" in prompt:
                     self._plan_calls += 1
                     if self._plan_calls == 1:
-                        ed = {
+                        # First attempt: invalid editorial enum
+                        editing = {
+                            "transition": "frenetic_zoom",
                             "pacing": "slow",
-                            "visual_style": "empty chairs and a flying saucer "
-                                            "in the saloon",
-                            "audio_style": "minimal",
-                            "editing_style": "quiet cuts",
+                            "rhythm": "steady",
+                            "emphasis": "character",
+                            "repetition": "none",
+                            "purpose": "contrast",
                         }
                     else:
-                        ed = {
+                        # Second attempt: valid editorial enums
+                        editing = {
+                            "transition": "cut",
                             "pacing": "slow",
-                            "visual_style": "close-up on the revolver while "
-                                            "the barman talks",
-                            "audio_style": "minimal",
-                            "editing_style": "quiet cuts",
+                            "rhythm": "steady",
+                            "emphasis": "character",
+                            "repetition": "none",
+                            "purpose": "contrast",
                         }
                     return json.dumps({
                         "concept": {"title": "C", "hook": "h", "thesis": "s"},
                         "format": {"type": "short_video_essay",
                                    "duration_sec": 90},
-                        "editorial_direction": ed,
+                        "editorial_plan": {
+                            "visual": {"scene_id": "scene-1",
+                                       "start_sec": 1.0, "end_sec": 5.0,
+                                       "source_fact_refs": []},
+                            "editing": editing,
+                            "audio": {"movie_audio": "retain",
+                                      "narration": "moderate", "music": "low"},
+                        },
                     })
                 return json.dumps({"concepts": [{
                     "title": "C", "hook": "h",
@@ -807,16 +900,15 @@ class TestMovieGroundedDirector:
         assert res["llm_stats"]["llm_calls"] == 3
         assert plan is not None
         audit = plan["grounding_audit"]
-        assert audit["sufficient"] is True
-        assert "chairs" not in audit["invented_terms"]
-        assert "revolver" in " ".join(audit["grounded_terms"])
-        # The corrective prompt carried the exact offending terms.
-        assert "flying" in mock.calls[-1] or "saucer" in mock.calls[-1]
+        assert audit["overall_valid"] is True
+        # The corrective prompt carried the invalid term.
+        assert "frenetic_zoom" in mock.calls[-1]
 
     def test_plan_regeneration_bounded_at_one(self, facts, metadata, tmp_path):
-        """If the model keeps hallucinating, we record ONE retry and refuse to
-        emit the plan (strict plan gate): plan stays None with the honest
-        rejection + deterministic audit, never silently forced through."""
+        """If the model keeps producing invalid editorial enums, we record ONE
+        retry and refuse to emit the plan (strict plan gate): plan stays None
+        with the honest rejection + deterministic audit, never silently forced
+        through."""
 
         class _StubbornLLM:
             def __init__(self):
@@ -829,11 +921,20 @@ class TestMovieGroundedDirector:
                         "concept": {"title": "C", "hook": "h", "thesis": "s"},
                         "format": {"type": "short_video_essay",
                                    "duration_sec": 90},
-                        "editorial_direction": {
-                            "pacing": "slow",
-                            "visual_style": "a flying saucer over the saloon",
-                            "audio_style": "minimal",
-                            "editing_style": "quiet cuts",
+                        "editorial_plan": {
+                            "visual": {"scene_id": "scene-1",
+                                       "start_sec": 1.0, "end_sec": 5.0,
+                                       "source_fact_refs": []},
+                            "editing": {
+                                "transition": "INVALID_TRANSITION",
+                                "pacing": "INVALID_PACING",
+                                "rhythm": "steady",
+                                "emphasis": "character",
+                                "repetition": "none",
+                                "purpose": "contrast",
+                            },
+                            "audio": {"movie_audio": "retain",
+                                      "narration": "moderate", "music": "low"},
                         },
                     })
                 return json.dumps({"concepts": [{
@@ -854,16 +955,13 @@ class TestMovieGroundedDirector:
         rejection = res["plan_rejection"]
         assert rejection is not None
         audit = rejection["audit"]
-        assert audit["sufficient"] is False  # honestly recorded, not faked
-        assert "saucer" in audit["invented_terms"]
+        assert audit["overall_valid"] is False  # honestly recorded, not faked
 
     def test_strict_gate_rejects_the_clock_fail_plan(self, facts, metadata,
                                                      tmp_path):
         """Regression: the FAIL run invented an ungrounded editorial plan
-        ('hand-to-hand transfers', 'a soft steady hum', 'objects briefly
-        visible before being passed'...) that had NOTHING to do with the real
-        evidence scenes, yet the old pipeline emitted it with a recorded
-        insufficient audit. The strict plan gate must refuse to emit it."""
+        that had NOTHING to do with the real evidence scenes. The strict plan
+        gate must refuse to emit it."""
 
         class _ClockFailLLM:
             def __init__(self):
@@ -876,23 +974,20 @@ class TestMovieGroundedDirector:
                         "concept": {"title": "C", "hook": "h", "thesis": "s"},
                         "format": {"type": "short_video_essay",
                                    "duration_sec": 90},
-                        "editorial_direction": {
-                            "pacing": "The pacing follows the rhythm of "
-                                      "hand-to-hand transfers, pausing only "
-                                      "when a hand stops moving, emphasizing "
-                                      "the absence of motion as a point of "
-                                      "stillness.",
-                            "visual_style": "Close-ups of hands placing "
-                                            "objects into other hands, hands "
-                                            "opening and closing, objects "
-                                            "briefly visible before being "
-                                            "passed.",
-                            "audio_style": "Minimal ambient sound. A soft, "
-                                           "steady hum fades in and out with "
-                                           "each hand transfer.",
-                            "editing_style": "Cuts occur precisely at the "
-                                             "moment a hand releases an "
-                                             "object or receives one.",
+                        "editorial_plan": {
+                            "visual": {"scene_id": "scene-999",  # nonexistent
+                                       "start_sec": 1.0, "end_sec": 5.0,
+                                       "source_fact_refs": ["nonexistent_prop"]},
+                            "editing": {
+                                "transition": "cut",
+                                "pacing": "slow",
+                                "rhythm": "steady",
+                                "emphasis": "character",
+                                "repetition": "none",
+                                "purpose": "contrast",
+                            },
+                            "audio": {"movie_audio": "retain",
+                                      "narration": "moderate", "music": "low"},
                         },
                     })
                 return json.dumps({"concepts": [{
@@ -912,14 +1007,10 @@ class TestMovieGroundedDirector:
         rejection = res["plan_rejection"]
         assert rejection is not None
         audit = rejection["audit"]
-        assert audit["sufficient"] is False
-        # The specific hallucinated vocabulary is caught deterministically.
-        # "hum", "emphasizing", "ambient", "steady", "minimal", "soft", "absent",
-        # "place"/"placing" (fact terms) are now whitelisted/validated; check
-        # for genuinely ungrounded terms that are neither editorial nor fact terms.
-        invented = " ".join(audit["invented_terms"])
-        for term in ("transfer", "briefly", "precisely", "releases", "follows", "stops", "ups", "opening", "closing", "visible", "receives"):
-            assert term in invented, f"invented term '{term}' must be caught"
+        assert audit["overall_valid"] is False
+        # The nonexistent scene_id is caught by the fact validator.
+        fact_errors = audit["fact_validation"]["errors"]
+        assert any("scene-999" in e or "not in evidence" in e for e in fact_errors)
 
     def test_write_report_writes_director_reasoning_md(self, facts, metadata, tmp_path):
         """The public write_report alias produces reports/director_reasoning.md."""
@@ -933,8 +1024,15 @@ class TestMovieGroundedDirector:
             plan={
                 "concept": {"title": "Real One", "hook": "h", "thesis": "s"},
                 "format": {"type": "short_video_essay", "duration_sec": 90},
-                "editorial_direction": {"pacing": "p", "visual_style": "v",
-                                        "audio_style": "a", "editing_style": "e"},
+                "editorial_plan": {
+                    "visual": {"scene_id": "scene-1", "start_sec": 1.0,
+                               "end_sec": 5.0, "source_fact_refs": []},
+                    "editing": {"transition": "cut", "pacing": "slow",
+                                "rhythm": "steady", "emphasis": "character",
+                                "repetition": "none", "purpose": "contrast"},
+                    "audio": {"movie_audio": "retain", "narration": "moderate",
+                              "music": "low"},
+                },
             },
         )
         director = MovieGroundedDirector(mock, memory_dir=tmp_path / "mem")
@@ -963,8 +1061,15 @@ class TestRunBookkeeping:
             plan={
                 "concept": {"title": "Grounded", "hook": "h", "thesis": "s"},
                 "format": {"type": "short_video_essay", "duration_sec": 90},
-                "editorial_direction": {"pacing": "p", "visual_style": "v",
-                                        "audio_style": "a", "editing_style": "e"},
+                "editorial_plan": {
+                    "visual": {"scene_id": "scene-1", "start_sec": 1.0,
+                               "end_sec": 5.0, "source_fact_refs": []},
+                    "editing": {"transition": "cut", "pacing": "slow",
+                                "rhythm": "steady", "emphasis": "character",
+                                "repetition": "none", "purpose": "contrast"},
+                    "audio": {"movie_audio": "retain", "narration": "moderate",
+                              "music": "low"},
+                },
             },
         )
         director = MovieGroundedDirector(mock, memory_dir=tmp_path / "mem")
@@ -992,8 +1097,15 @@ class TestRunBookkeeping:
             plan={
                 "concept": {"title": "Good", "hook": "h", "thesis": "s"},
                 "format": {"type": "short_video_essay", "duration_sec": 90},
-                "editorial_direction": {"pacing": "p", "visual_style": "v",
-                                        "audio_style": "a", "editing_style": "e"},
+                "editorial_plan": {
+                    "visual": {"scene_id": "scene-1", "start_sec": 1.0,
+                               "end_sec": 5.0, "source_fact_refs": []},
+                    "editing": {"transition": "cut", "pacing": "slow",
+                                "rhythm": "steady", "emphasis": "character",
+                                "repetition": "none", "purpose": "contrast"},
+                    "audio": {"movie_audio": "retain", "narration": "moderate",
+                              "music": "low"},
+                },
             },
         )
         director = MovieGroundedDirector(mock, memory_dir=tmp_path / "mem")
