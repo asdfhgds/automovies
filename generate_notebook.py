@@ -103,7 +103,7 @@ notebook = {
                 "    print(f'BitsAndBytes: {bitsandbytes.__version__} (installed)')"
             ]
         },
-        {
+{
             "cell_type": "code",
             "execution_count": None,
             "metadata": {},
@@ -126,6 +126,42 @@ notebook = {
                 "else:\n",
                 "    print('Movie data NOT found at:', project_dir)\n",
                 "    print('You need to upload the movie_index.json to this location')"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# @title Create project_meta.json (required by pipeline)\n",
+                "import os\n",
+                "import json\n",
+                "\n",
+                "project_dir = '/content/automovies/data/bc6384be-47a5-4ee8-8674-7ff861472026'\n",
+                "meta_path = os.path.join(project_dir, 'project_meta.json')\n",
+                "\n",
+                "if not os.path.exists(meta_path):\n",
+                "    meta = {\n",
+                "        \"project_id\": \"bc6384be-47a5-4ee8-8674-7ff861472026\",\n",
+                "        \"title\": \"Real Movie Vision Test\",\n",
+                "        \"source_path\": \"/content/automovies/data/bc6384be-47a5-4ee8-8674-7ff861472026/source.mp4\"\n",
+                "    }\n",
+                "    with open(meta_path, 'w') as f:\n",
+                "        json.dump(meta, f, indent=2)\n",
+                "    print('Created project_meta.json')\n",
+                "else:\n",
+                "    with open(meta_path, 'r') as f:\n",
+                "        meta = json.load(f)\n",
+                "    print('project_meta.json exists:', json.dumps(meta, indent=2))\n",
+                "\n",
+                "# Verify source video exists\n",
+                "source_path = meta.get('source_path', '')\n",
+                "if os.path.exists(source_path):\n",
+                "    print(f'Source video found: {source_path}')\n",
+                "else:\n",
+                "    print(f'WARNING: Source video NOT found at: {source_path}')\n",
+                "    print('Upload the source video to this location or update source_path in project_meta.json')"
             ]
         },
         {
