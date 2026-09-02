@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://automovies.dev/schemas/project_manifest.schema.json",
+  "title": "Project Manifest",
+  "type": "object",
+  "required": ["project_id", "title", "pipeline_version", "created_at", "updated_at", "stages", "artifacts", "config"],
+  "properties": {
+    "project_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique project identifier"
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable project title"
+    },
+    "source_path": {
+      "type": ["string", "null"],
+      "description": "Absolute path to source video file"
+    },
+    "pipeline_version": {
+      "type": "string",
+      "description": "Pipeline schema version"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Project creation timestamp"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last update timestamp"
+    },
+    "stages": {
+      "type": "object",
+      "description": "Stage execution records",
+      "patternProperties": {
+        "^[a-z_]+$": { "$ref": "#/definitions/stage_record" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "description": "Artifact registry",
+      "patternProperties": {
+        "^[a-z_]+_[a-f0-9]{12}$": { "$ref": "#/definitions/artifact_record" }
+      }
+    },
+    "config": {
+      "type": "object",
+      "description": "Project configuration used for this run"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional project metadata"
+    }
+  },
+  "definitions": {
+    "stage_record": {
+      "type": "object",
+      "required": ["name", "status", "input_artifact_ids", "output_artifact_ids"],
+      "properties": {
+        "name": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["not_started", "running", "completed", "failed", "skipped"]
+        },
+        "started_at": { "type": ["string", "null"], "format": "date-time" },
+        "completed_at": { "type": ["string", "null"], "format": "date-time" },
+        "error": { "type": ["string", "null"] },
+        "config_hash": { "type": "string" },
+        "config": { "type": "object" },
+        "model": { "type": ["string", "null"] },
+        "device": { "type": ["string", "null"] },
+        "input_artifact_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "output_artifact_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "duration_seconds": { "type": "number", "minimum": 0 },
+        "metadata": { "type": "object" }
+      }
+    },
+    "artifact_record": {
+      "type": "object",
+      "required": ["artifact_id", "artifact_type", "path", "producer_stage", "version", "created_at", "content_hash", "size_bytes"],
+      "properties": {
+        "artifact_id": { "type": "string" },
+        "artifact_type": {
+          "type": "string",
+          "enum": [
+            "movie_index", "semantic_index", "characters", "events", "manifest",
+            "transcript", "scene_index", "scene_cards", "scene_ranking", "selected_scenes",
+            "director_plan", "grounded_script",
+            "editorial_plan", "editorial_timeline", "editorial_decisions",
+            "script", "extracted_clips", "generated_visuals", "asset_plan",
+            "tts_audio", "tts_meta", "final_render", "render_job",
+            "provider_manifest", "pipeline_status", "qc_report",
+            "director_reasoning", "director_validation",
+            "project_meta", "project_manifest"
+          ]
+        },
+        "path": { "type": "string" },
+        "producer_stage": { "type": "string" },
+        "version": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "content_hash": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "metadata": { "type": "object" },
+        "input_artifact_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

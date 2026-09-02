@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://automovies.dev/schemas/render_manifest.schema.json",
+  "title": "Render Manifest",
+  "type": "object",
+  "required": ["codec", "crf", "preset", "resolution", "duration_sec", "size_bytes"],
+  "properties": {
+    "codec": { "type": "string" },
+    "crf": { "type": "integer", "minimum": 0, "maximum": 51 },
+    "preset": { "type": "string" },
+    "resolution": { "type": ["string", "null"] },
+    "duration_sec": { "type": "number", "minimum": 0 },
+    "size_bytes": { "type": "integer", "minimum": 0 },
+    "segments": { "type": "integer", "minimum": 0 }
+  }
+}

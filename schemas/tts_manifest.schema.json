@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://automovies.dev/schemas/tts_manifest.schema.json",
+  "title": "TTS Manifest",
+  "type": "object",
+  "required": ["provider", "model", "voice", "emotion", "pace", "real"],
+  "properties": {
+    "provider": { "type": "string" },
+    "model": { "type": ["string", "null"] },
+    "voice": { "type": ["string", "null"] },
+    "emotion": { "type": ["string", "null"] },
+    "pace": { "type": ["number", "null"] },
+    "real": { "type": "boolean" },
+    "generation_time_sec": { "type": "number" },
+    "duration_sec": { "type": "number" },
+    "sample_rate": { "type": "integer" }
+  }
+}

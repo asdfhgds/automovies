@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://automovies.dev/schemas/director_output.schema.json",
+  "title": "Director Output",
+  "type": "object",
+  "required": ["thesis", "hook", "title", "tone", "structure", "grounded"],
+  "properties": {
+    "thesis": { "type": "string" },
+    "hook": { "type": "string" },
+    "title": { "type": "string" },
+    "tone": { "type": "string" },
+    "structure": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "goal", "target_seconds"],
+        "properties": {
+          "id": { "type": "string" },
+          "goal": { "type": "string" },
+          "target_seconds": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "visual_strategy": { "type": "array", "items": { "type": "string" } },
+    "music_mood": { "type": "string" },
+    "length_target_sec": { "type": "integer", "minimum": 1 },
+    "grounded": { "type": "boolean" },
+    "concept": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "hook": { "type": "string" },
+        "thesis": { "type": "string" },
+        "why_interesting": { "type": "string" },
+        "evidence_refs": { "type": "array" },
+        "visual_opportunity": { "type": "string" }
+      }
+    },
+    "production_plan": { "type": "object" },
+    "all_concepts": { "type": "array" },
+    "evidence_strategy": { "type": "object" },
+    "editorial_intent": { "type": "object" },
+    "supporting_scenes": { "type": "array" }
+  }
+}

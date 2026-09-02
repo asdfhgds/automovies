@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://automovies.dev/schemas/movie_index.schema.json",
+  "title": "Movie Index",
+  "type": "object",
+  "required": ["project_id", "source_path", "movie", "shots", "scenes", "characters", "events", "provenance"],
+  "properties": {
+    "project_id": { "type": "string", "format": "uuid" },
+    "source_path": { "type": ["string", "null"] },
+    "movie": {
+      "type": "object",
+      "required": ["title", "duration_sec"],
+      "properties": {
+        "title": { "type": "string" },
+        "duration_sec": { "type": "number", "minimum": 0 }
+      }
+    },
+    "shots": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/shot" }
+    },
+    "scenes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/scene" }
+    },
+    "characters": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "event_id": { "type": "string" },
+          "type": { "type": "string" },
+          "description": { "type": "string" },
+          "scenes": { "type": "array", "items": { "type": "string" } },
+          "start_sec": { "type": "number" },
+          "end_sec": { "type": "number" }
+        }
+      }
+    },
+    "scene_character_map": {
+      "type": "object",
+      "patternProperties": {
+        "^scene-\\d+$": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["scene_enricher", "grouping", "semantic_method", "word_level_timestamps", "keyframes"],
+      "properties": {
+        "scene_enricher": { "type": "string" },
+        "grouping": { "type": "object" },
+        "semantic_method": { "type": "string" },
+        "word_level_timestamps": { "type": "boolean" },
+        "keyframes": { "type": "boolean" }
+      }
+    }
+  },
+  "definitions": {
+    "shot": {
+      "type": "object",
+      "required": ["shot_id", "start_sec", "end_sec"],
+      "properties": {
+        "shot_id": { "type": "string" },
+        "start_sec": { "type": "number" },
+        "end_sec": { "type": "number" }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "required": ["scene_id", "start_sec", "end_sec", "transcript", "shot_ids", "story"],
+      "properties": {
+        "scene_id": { "type": "string" },
+        "start_sec": { "type": "number" },
+        "end_sec": { "type": "number" },
+        "transcript": { "type": "string" },
+        "shot_ids": { "type": "array", "items": { "type": "string" } },
+        "shots": { "type": "array", "items": { "$ref": "#/definitions/shot" } },
+        "key_frames": { "type": "array", "items": { "type": "string" } },
+        "key_frame_times_sec": { "type": "array", "items": { "type": "number" } },
+        "analysis": { "type": "object" },
+        "story": {
+          "type": "object",
+          "properties": {
+            "characters": { "type": "array", "items": { "type": "string" } },
+            "location": { "type": ["string", "null"] },
+            "actions": { "type": "array", "items": { "type": "string" } },
+            "objects": { "type": "array", "items": { "type": "string" } },
+            "themes": { "type": "array", "items": { "type": "string" } },
+            "mood": { "type": ["string", "null"] },
+            "dialogue": { "type": "array", "items": { "type": "object" } },
+            "visual_description": { "type": ["string", "null"] },
+            "visual_events": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://automovies.dev/schemas/script.schema.json",
+  "title": "Script",
+  "type": "object",
+  "required": ["thesis", "sections", "grounded"],
+  "properties": {
+    "thesis": { "type": "string" },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "target_seconds", "narration"],
+        "properties": {
+          "type": { "type": "string" },
+          "target_seconds": { "type": "integer", "minimum": 1 },
+          "narration": { "type": "string" },
+          "evidence_refs": { "type": "array" },
+          "visual_description": { "type": "string" },
+          "scene_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "grounded": { "type": "boolean" },
+    "format": { "type": "string", "enum": ["short_video_essay", "documentary", "analysis"] },
+    "duration_sec": { "type": "integer", "minimum": 1 },
+    "narration_properties": { "type": "object" }
+  }
+}
